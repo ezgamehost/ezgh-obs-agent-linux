@@ -28,15 +28,15 @@ Execution is inline, with an independent final code review. Main is the establis
 
 ## Tasks
 
-- [ ] 1. Configuration/identity: internal/config and internal/identity; tests for strict parsing,
+- [x] 1. Configuration/identity: internal/config and internal/identity; tests for strict parsing,
   defaults, durations, reserved attributes, file permissions, stable UUID and invalid targets.
-- [ ] 2. Storage/transform: internal/spool and internal/telemetry; tests for atomic enqueue/checkpoint,
+- [x] 2. Storage/transform: internal/spool and internal/telemetry; tests for atomic enqueue/checkpoint,
   queue replay, ack, binding, format version, quota, bounded UTF-8 records and size-based splitting.
-- [ ] 3. Export: internal/export; real HTTP test server covers protobuf, success/partial success,
+- [x] 3. Export: internal/export; real HTTP test server covers protobuf, success/partial success,
   malformed response, retries, Retry-After, 401/403 pause, 413 split and redirect refusal.
-- [ ] 4. Collection: internal/source/{journal,file,node}; tests for journal mapping/recovery,
+- [x] 4. Collection: internal/source/{journal,file,node}; tests for journal mapping/recovery,
   file rename/truncate/restart/long lines, and exact node gauge/counter conversion.
-- [ ] 5. Runtime/CLI: internal/app, internal/diagnostics, cmd/ezgh-obs-agent-linux;
+- [x] 5. Runtime/CLI: internal/app, internal/diagnostics, cmd/ezgh-obs-agent-linux;
   tests for state locking, local status, graceful stop, configuration validation and doctor.
 - [ ] 6. Packaging/qualification: packaging, scripts, .github/workflows, README;
   Linux race/vet/build, end-to-end daemon smoke, distribution package lifecycle,
@@ -44,3 +44,8 @@ Execution is inline, with an independent final code review. Main is the establis
 
 For each task: write behavioral tests, observe failure, implement, run the relevant suite,
 then commit and push the verified chunk. Linux-only collection is verified on Linux.
+
+Implementation ruling: upstream netstat/vmstat emit untyped families. Preserve
+their raw values as OTLP gauges with unchanged names; do not infer counter semantics.
+Queue admission reserves maintenance capacity, while bbolt MaxSize enforces the
+physical file ceiling. Source commits are bounded independently of operator budgets.

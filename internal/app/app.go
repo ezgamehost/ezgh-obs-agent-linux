@@ -113,6 +113,18 @@ func Run(ctx context.Context, c config.Config, reload <-chan os.Signal) error {
 			e = lq.Enqueue(payloads, cp)
 			if e == nil {
 				state.Add("logs_collected", uint64(len(rows)))
+				for _, row := range rows {
+					for _, a := range row.Record.Attributes {
+						if a.Value.GetStringValue() == "true" {
+							switch a.Key {
+							case "ezgh.log.truncated":
+								state.Add("logs_truncated", 1)
+							case "ezgh.log.invalid_utf8":
+								state.Add("logs_invalid_utf8", 1)
+							}
+						}
+					}
+				}
 				state.Set("log_storage", "ready")
 				return nil
 			}

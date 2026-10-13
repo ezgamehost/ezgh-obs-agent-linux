@@ -70,6 +70,9 @@ collectors are `cpu`, `meminfo`, `loadavg`, `diskstats`, `filesystem`, `netdev`,
 `netstat`, `stat`, `time`, `uname`, `vmstat` and `os`. Configure `metrics.collectors`
 to select a subset. Other upstream collectors are deliberately unavailable.
 
+Upstream untyped netstat/vmstat samples are represented as raw OTLP gauges; the
+agent does not infer counter metadata for them.
+
 Names and labels are preserved, including `node_cpu_seconds_total` and
 `node_memory_MemAvailable_bytes`. Counters are cumulative; query rates in EZGH.
 Resources carry a persistent random `host.id`, current `host.name`,
@@ -109,7 +112,9 @@ The default state budget allocates 256 MiB to logs and 128 MiB to metrics, leavi
 128 MiB of a recommended 512 MiB state allocation for maintenance and bookkeeping.
 A separate 64 MiB filesystem-free reserve is enforced. Override
 `storage.log_bytes`, `storage.metric_bytes` and `storage.reserve_bytes` as integer
-bytes. Admission is conservative because database pages need write headroom.
+bytes. Admission is conservative because database pages need write headroom. Up to
+8 MiB per database (half for small budgets) is reserved for splitting and
+acknowledgments; bbolt also enforces a hard file-size ceiling.
 
 When logs fill the queue, source reading pauses. When metrics fill it, new scrapes
 are skipped. Source retention can expire during an outage. A crash after server

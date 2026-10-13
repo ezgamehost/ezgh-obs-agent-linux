@@ -78,3 +78,28 @@ func TestMetricSplitShrinksGroupedRequest(t *testing.T) {
 		t.Fatal("lost points")
 	}
 }
+
+func TestLogFlagsDistinguishReplacementFromTruncation(t *testing.T) {
+	r := Log("bad\xff", time.Now(), 0, nil)
+	flags := map[string]string{}
+	for _, a := range r.Attributes {
+		flags[a.Key] = a.Value.GetStringValue()
+	}
+	if flags["ezgh.log.invalid_utf8"] != "true" || flags["ezgh.log.truncated"] != "" {
+		t.Fatal(flags)
+	}
+}
+
+func TestUpstreamUntypedPreservesNameAndValue(t *testing.T) {
+	f := &dto.MetricFamily{Name: proto.String("node_vmstat_pgpgin"), Type: dto.MetricType_UNTYPED.Enum(), Metric: []*dto.Metric{{Untyped: &dto.Untyped{Value: proto.Float64(123)}}}}
+	b, e := EncodeMetrics([]*dto.MetricFamily{f}, Resource("id", "host", "prod", "node-exporter"), time.Now(), 100, 1<<20)
+	if e != nil || len(b) != 1 {
+		t.Fatalf("%v %d", e, len(b))
+	}
+	r := new(metrics.ExportMetricsServiceRequest)
+	proto.Unmarshal(b[0], r)
+	m := r.ResourceMetrics[0].ScopeMetrics[0].Metrics[0]
+	if m.Name != "node_vmstat_pgpgin" || m.GetGauge().DataPoints[0].GetAsDouble() != 123 {
+		t.Fatal(m)
+	}
+}

@@ -41,6 +41,8 @@ func Bounded(s string, n int) (string, bool) {
 	return v, changed
 }
 func Log(body string, at time.Time, severity logs.SeverityNumber, attrs map[string]string) *logs.LogRecord {
+	invalid := !utf8.ValidString(body)
+	body = strings.ToValidUTF8(body, "�")
 	body, truncated := Bounded(body, 64<<10)
 	r := &logs.LogRecord{TimeUnixNano: uint64(at.UnixNano()), ObservedTimeUnixNano: uint64(time.Now().UnixNano()), Body: &common.AnyValue{Value: &common.AnyValue_StringValue{StringValue: body}}, SeverityNumber: severity}
 	keys := make([]string, 0, len(attrs))
@@ -55,6 +57,9 @@ func Log(body string, at time.Time, severity logs.SeverityNumber, attrs map[stri
 			r.Attributes = r.Attributes[:len(r.Attributes)-1]
 			break
 		}
+	}
+	if invalid {
+		r.Attributes = append(r.Attributes, Attribute("ezgh.log.invalid_utf8", "true"))
 	}
 	if truncated {
 		r.Attributes = append(r.Attributes, Attribute("ezgh.log.truncated", "true"))
@@ -122,6 +127,11 @@ func EncodeMetrics(families []*dto.MetricFamily, res *resource.Resource, at time
 			switch f.GetType() {
 			case dto.MetricType_GAUGE:
 				p.Value = &metrics.NumberDataPoint_AsDouble{AsDouble: m.GetGauge().GetValue()}
+				v.Data = &metrics.Metric_Gauge{Gauge: &metrics.Gauge{DataPoints: []*metrics.NumberDataPoint{p}}}
+			case dto.MetricType_UNTYPED:
+				// Upstream netstat/vmstat deliberately omit type metadata. Preserve
+				// the raw sample as a gauge; do not infer monotonicity or rename it.
+				p.Value = &metrics.NumberDataPoint_AsDouble{AsDouble: m.GetUntyped().GetValue()}
 				v.Data = &metrics.Metric_Gauge{Gauge: &metrics.Gauge{DataPoints: []*metrics.NumberDataPoint{p}}}
 			case dto.MetricType_COUNTER:
 				p.Value = &metrics.NumberDataPoint_AsDouble{AsDouble: m.GetCounter().GetValue()}

@@ -12,7 +12,10 @@ import (
 	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/proto"
 	"math/rand/v2"
+	"os"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -53,7 +56,7 @@ func collectMetrics(ctx context.Context, c config.Config, id, host string, q *sp
 				s.Add("metrics_collection_errors", 1)
 			}
 			for _, f := range r.f {
-				if f.GetType() != dto.MetricType_GAUGE && f.GetType() != dto.MetricType_COUNTER {
+				if f.GetType() != dto.MetricType_GAUGE && f.GetType() != dto.MetricType_COUNTER && f.GetType() != dto.MetricType_UNTYPED {
 					s.Add("metrics_unsupported_families", 1)
 				}
 			}
@@ -84,6 +87,14 @@ func collectMetrics(ctx context.Context, c config.Config, id, host string, q *sp
 			var mem runtime.MemStats
 			runtime.ReadMemStats(&mem)
 			s.Gauge("go_heap_bytes", float64(mem.Alloc))
+			if data, e := os.ReadFile("/proc/self/statm"); e == nil {
+				fields := strings.Fields(string(data))
+				if len(fields) > 1 {
+					if pages, e := strconv.ParseUint(fields[1], 10, 64); e == nil {
+						s.Gauge("process_resident_memory_bytes", float64(pages)*float64(os.Getpagesize()))
+					}
+				}
+			}
 			var ru unix.Rusage
 			if unix.Getrusage(unix.RUSAGE_SELF, &ru) == nil {
 				s.Gauge("process_cpu_seconds", float64(ru.Utime.Sec+ru.Stime.Sec)+float64(ru.Utime.Usec+ru.Stime.Usec)/1e6)

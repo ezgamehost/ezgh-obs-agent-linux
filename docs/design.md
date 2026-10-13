@@ -110,9 +110,12 @@ otherwise use the collection timestamp.
 Retain original names and leave OTLP unit empty when Prometheus provides none;
 unit suffixes in names still carry the original meaning. Do not infer units that
 could cause the backend translator to rename a metric. Known supplied units must
-pass the same name round-trip tests before inclusion. V1 supports the gauge and
-counter families emitted by the allowlist. Unexpected family types are counted
-as unsupported and omitted, never silently flattened to gauges.
+pass the same name round-trip tests before inclusion. V1 supports gauge and counter families. Implementation verification found that
+the pinned upstream netstat and vmstat collectors emit untyped families. Those
+are explicitly represented as raw OTLP gauges, preserving names and values
+without inferring monotonicity or counter suffixes. Other unexpected family
+types are counted as unsupported and omitted. This is an explicit mapping
+decision made during implementation, not a claim that upstream supplied types.
 
 Preserve `node_scrape_collector_success` and duration metrics. A collector failure
 must not discard successful collectors. Upstream Collect calls are not generally
