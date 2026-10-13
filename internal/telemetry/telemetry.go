@@ -23,6 +23,9 @@ func Attribute(k, v string) *common.KeyValue {
 	return &common.KeyValue{Key: k, Value: &common.AnyValue{Value: &common.AnyValue_StringValue{StringValue: v}}}
 }
 func Resource(id, hostname, environment, service string) *resource.Resource {
+	id, _ = Bounded(id, 4096)
+	hostname, _ = Bounded(hostname, 4096)
+	service, _ = Bounded(service, 4096)
 	return &resource.Resource{Attributes: []*common.KeyValue{Attribute("host.id", id), Attribute("host.name", hostname), Attribute("os.type", "linux"), Attribute("service.name", service), Attribute("service.instance.id", id), Attribute("ezgh.metadata.application", "linux"), Attribute("ezgh.metadata.environment", environment)}}
 }
 func Bounded(s string, n int) (string, bool) {
@@ -207,22 +210,46 @@ func Split(signal string, b []byte) ([][]byte, error) {
 	if e := proto.Unmarshal(b, r); e != nil {
 		return nil, e
 	}
-	var rows []*metrics.ResourceMetrics
+	var count int
 	for _, rm := range r.ResourceMetrics {
 		for _, sm := range rm.ScopeMetrics {
+			count += len(sm.Metrics)
+		}
+	}
+	if count < 2 {
+		return nil, errors.New("indivisible point")
+	}
+	halves := []*metricservice.ExportMetricsServiceRequest{{}, {}}
+	index := 0
+	for _, rm := range r.ResourceMetrics {
+		rms := []*metrics.ResourceMetrics{{Resource: rm.Resource, SchemaUrl: rm.SchemaUrl}, {Resource: rm.Resource, SchemaUrl: rm.SchemaUrl}}
+		for _, sm := range rm.ScopeMetrics {
+			sms := []*metrics.ScopeMetrics{{Scope: sm.Scope, SchemaUrl: sm.SchemaUrl}, {Scope: sm.Scope, SchemaUrl: sm.SchemaUrl}}
 			for _, m := range sm.Metrics {
-				rows = append(rows, &metrics.ResourceMetrics{Resource: rm.Resource, ScopeMetrics: []*metrics.ScopeMetrics{{Scope: sm.Scope, Metrics: []*metrics.Metric{m}}}})
+				part := 0
+				if index >= count/2 {
+					part = 1
+				}
+				sms[part].Metrics = append(sms[part].Metrics, m)
+				index++
+			}
+			for part := range 2 {
+				if len(sms[part].Metrics) > 0 {
+					rms[part].ScopeMetrics = append(rms[part].ScopeMetrics, sms[part])
+				}
+			}
+		}
+		for part := range 2 {
+			if len(rms[part].ScopeMetrics) > 0 {
+				halves[part].ResourceMetrics = append(halves[part].ResourceMetrics, rms[part])
 			}
 		}
 	}
-	if len(rows) < 2 {
-		return nil, errors.New("indivisible point")
-	}
-	a, e := proto.Marshal(&metricservice.ExportMetricsServiceRequest{ResourceMetrics: rows[:len(rows)/2]})
+	a, e := proto.Marshal(halves[0])
 	if e != nil {
 		return nil, e
 	}
-	c, e := proto.Marshal(&metricservice.ExportMetricsServiceRequest{ResourceMetrics: rows[len(rows)/2:]})
+	c, e := proto.Marshal(halves[1])
 	return [][]byte{a, c}, e
 }
 func Count(signal string, b []byte) int64 {

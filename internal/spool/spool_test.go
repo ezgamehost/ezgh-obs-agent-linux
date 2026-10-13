@@ -81,3 +81,62 @@ func TestSplitPreservesFIFO(t *testing.T) {
 		q.Ack(b.ID)
 	}
 }
+
+func TestRejectedReplacementKeepsParent(t *testing.T) {
+	q, e := Open(filepath.Join(t.TempDir(), "q"), "a", 8<<20, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer q.Close()
+	q.Enqueue([][]byte{[]byte("parent")}, nil)
+	b, _ := q.Peek()
+	if e = q.Replace(b.ID, [][]byte{make([]byte, 8<<20), []byte("x")}); !errors.Is(e, ErrFull) {
+		t.Fatal(e)
+	}
+	got, e := q.Peek()
+	if e != nil || string(got.Payload) != "parent" {
+		t.Fatalf("%v %v", got, e)
+	}
+}
+func TestQueueReusesAcknowledgedSpace(t *testing.T) {
+	q, e := Open(filepath.Join(t.TempDir(), "q"), "a", 8<<20, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer q.Close()
+	for round := 0; round < 3; round++ {
+		count := 0
+		for {
+			e = q.Enqueue([][]byte{make([]byte, 32<<10)}, nil)
+			if errors.Is(e, ErrFull) {
+				break
+			}
+			if e != nil {
+				t.Fatal(e)
+			}
+			count++
+			if count > 1000 {
+				t.Fatal("unbounded queue")
+			}
+		}
+		if count < 10 {
+			t.Fatalf("failed to reuse space: round %d count %d", round, count)
+		}
+		for {
+			b, e := q.Peek()
+			if errors.Is(e, ErrEmpty) {
+				break
+			}
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = q.Ack(b.ID); e != nil {
+				t.Fatal(e)
+			}
+		}
+		st, e := q.Stats()
+		if e != nil || st.Bytes > 8<<20 {
+			t.Fatalf("budget breached: %+v %v", st, e)
+		}
+	}
+}

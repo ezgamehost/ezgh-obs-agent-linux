@@ -72,3 +72,16 @@ func TestNoCredentialRedirect(t *testing.T) {
 		t.Fatalf("redirect followed: %d %+v", hits, o)
 	}
 }
+
+func TestInterruptedSuccessRetries(t *testing.T) {
+	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.Header().Set("Content-Length", "100")
+		w.Write([]byte{10, 2})
+	}))
+	defer s.Close()
+	c := NewWithClient(s.URL, s.Client(), "test")
+	if o := c.Send(context.Background(), "logs", nil); o.Kind != Retry {
+		t.Fatal(o)
+	}
+}

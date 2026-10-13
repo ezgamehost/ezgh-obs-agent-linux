@@ -1,0 +1,36 @@
+[Unit]
+Description=EZGH Cloud host metrics and log agent
+Documentation=https://github.com/ezgamehost/ezgh-obs-agent-linux
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/ezgh-obs-agent-linux/ingest-key
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ezgh-obs-agent
+Group=ezgh-obs-agent
+ExecStartPre=/usr/bin/ezgh-obs-agent-linux validate --config /etc/ezgh-obs-agent-linux/config.yaml
+ExecStart=/usr/bin/ezgh-obs-agent-linux run --config /etc/ezgh-obs-agent-linux/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+StateDirectory=ezgh-obs-agent-linux
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

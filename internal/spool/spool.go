@@ -10,6 +10,7 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	berrors "go.etcd.io/bbolt/errors"
 	"golang.org/x/sys/unix"
 )
 
@@ -41,7 +42,7 @@ func Open(path, binding string, limit int64, reserve uint64) (*Queue, error) {
 	if st, e := os.Lstat(path); e == nil && (!st.Mode().IsRegular() || st.Mode().Perm()&0077 != 0) {
 		return nil, errors.New("queue must be a private regular file")
 	}
-	db, e := bolt.Open(path, 0600, &bolt.Options{Timeout: time.Second, FreelistType: bolt.FreelistMapType})
+	db, e := bolt.Open(path, 0600, &bolt.Options{Timeout: time.Second, FreelistType: bolt.FreelistMapType, MaxSize: int(limit)})
 	if e != nil {
 		return nil, fmt.Errorf("open queue (restore corrupt state; do not delete automatically): %w", e)
 	}
@@ -130,7 +131,7 @@ func (q *Queue) Enqueue(payloads [][]byte, cp map[string][]byte) error {
 	if e := q.admit(n); e != nil {
 		return e
 	}
-	return q.db.Update(func(tx *bolt.Tx) error {
+	return q.update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(batches)
 		for _, p := range payloads {
 			id, e := b.NextSequence()
@@ -175,7 +176,7 @@ func (q *Queue) Peek() (Batch, error) {
 func (q *Queue) Ack(id []byte) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(batches).Delete(id) })
+	return q.update(func(tx *bolt.Tx) error { return tx.Bucket(batches).Delete(id) })
 }
 func (q *Queue) Replace(id []byte, parts [][]byte) error {
 	q.mu.Lock()
@@ -183,7 +184,10 @@ func (q *Queue) Replace(id []byte, parts [][]byte) error {
 	if len(parts) != 2 || len(id) > 64 {
 		return errors.New("invalid split")
 	}
-	return q.db.Update(func(tx *bolt.Tx) error {
+	if e := q.admit(int64(len(parts[0]) + len(parts[1]))); e != nil {
+		return e
+	}
+	return q.update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(batches)
 		v := b.Get(id)
 		if len(v) < 8 {
@@ -225,3 +229,11 @@ func (q *Queue) Stats() (Stats, error) {
 	return s, e
 }
 func (q *Queue) CanAccept() bool { q.mu.Lock(); defer q.mu.Unlock(); return q.admit(1<<20) == nil }
+
+func (q *Queue) update(fn func(*bolt.Tx) error) error {
+	e := q.db.Update(fn)
+	if errors.Is(e, berrors.ErrMaxSizeReached) {
+		return ErrFull
+	}
+	return e
+}

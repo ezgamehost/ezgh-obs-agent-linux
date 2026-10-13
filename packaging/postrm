@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+if [ -d /run/systemd/system ]; then systemctl daemon-reload; fi
+# State, host identity and the operator-provided key are deliberately preserved.
+# Remove them explicitly only when retiring the installation.

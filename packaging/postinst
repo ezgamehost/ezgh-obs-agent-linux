@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+getent group ezgh-obs-agent >/dev/null || groupadd --system ezgh-obs-agent
+getent passwd ezgh-obs-agent >/dev/null || useradd --system --gid ezgh-obs-agent --home-dir /var/lib/ezgh-obs-agent-linux --shell /usr/sbin/nologin ezgh-obs-agent
+if getent group systemd-journal >/dev/null; then
+  usermod -a -G systemd-journal ezgh-obs-agent
+fi
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload
+  systemctl try-restart ezgh-obs-agent-linux.service || true
+fi

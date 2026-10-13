@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+if [ "${1:-}" = remove ] && [ -d /run/systemd/system ]; then
+  systemctl disable --now ezgh-obs-agent-linux.service || true
+fi

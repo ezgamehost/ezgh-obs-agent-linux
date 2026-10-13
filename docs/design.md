@@ -1,6 +1,7 @@
 # EZGH Linux observability agent design
 
-Status: **proposed design, not implemented**. Written 2026-10-12. The owner confirmed
+Status: **approved design; initial implementation present**. Written 2026-10-12.
+See [validation.md](validation.md) for executed checks and remaining qualification. The owner confirmed
 the name `ezgh-obs-agent-linux`, Go, one executable with embedded node-exporter
 collectors, and permission to depend on the host's `libsystemd`. Other choices below
 are the proposed v1 specification for review.
@@ -288,7 +289,7 @@ the journal; retain independent local status even when exports fail.
 ## Compatibility and validation
 
 The comparison baseline is obs-stack
-`a1b19f8d5f9b3f469e44065dbd5d2f9f8e8de80f`, the revision pinned by platform when
+`bce4bba06a0a87eea6982b3eb20b0d2788c84a50`, the revision pinned by platform when
 this design was written. Its `internal/otlp/validate.go` enforces the log body cap;
 `internal/query/prom/names.go` uses the OTLP translator and derives job/instance
 from resource identity. This baseline is not a claim that production was probed.
@@ -328,8 +329,7 @@ a production deployment.
 
 ## References
 
-- [Metrics ingest design](designs/metrics-ingest.md) and
-  [PromQL design](designs/metrics-promql.md), checked against the implementation baseline above.
+- EZGH service-template metrics ingest and PromQL designs, checked against the implementation baseline above.
 - [Upstream node collectors](https://github.com/prometheus/node_exporter/blob/master/collector/collector.go).
 - [Native journal Go bindings](https://github.com/coreos/go-systemd).
 - [OTLP protocol and retry rules](https://opentelemetry.io/docs/specs/otlp/).

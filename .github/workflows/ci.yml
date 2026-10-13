@@ -1,0 +1,45 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    container: golang:1.27-bullseye
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update -qq && apt-get install -y libsystemd-dev pkg-config python3 rpm
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: scripts/test.sh
+      - run: scripts/build.sh 0.1.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/
+  systemd:
+    needs: linux
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist
+      - run: sudo scripts/systemd-smoke.sh

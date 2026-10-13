@@ -100,7 +100,10 @@ func (c *Client) Send(ctx context.Context, signal string, payload []byte) Outcom
 		return Outcome{Kind: Drop, Reason: "http_rejection"}
 	}
 	b, e := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
-	if e != nil || len(b) > 64<<10 {
+	if e != nil {
+		return Outcome{Kind: Retry, Reason: "response_transport"}
+	}
+	if len(b) > 64<<10 {
 		return Outcome{Kind: Drop, Reason: "invalid_response"}
 	}
 	// Empty protobuf response is valid. Nonempty bodies must use the negotiated encoding.

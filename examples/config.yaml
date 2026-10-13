@@ -1,0 +1,20 @@
+version: 1
+target: production-hosts
+endpoint: https://obs-ingest.ezghcloud.com
+environment: production
+credential_file: /etc/ezgh-obs-agent-linux/ingest-key
+state_dir: /var/lib/ezgh-obs-agent-linux
+metrics:
+  enabled: true
+  interval: 30s
+logs:
+  journal:
+    enabled: true
+    start_at: end
+    exclude_units: [ezgh-obs-agent-linux.service]
+  files: []
+# Explicit file access must be granted to the ezgh-obs-agent service user.
+#  files:
+#    - paths: [/var/log/myapp/*.log]
+#      service: myapp
+#      start_at: end

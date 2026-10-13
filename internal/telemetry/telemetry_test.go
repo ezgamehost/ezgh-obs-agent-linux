@@ -4,6 +4,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	logs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	metrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	"google.golang.org/protobuf/proto"
 	"strings"
 	"testing"
@@ -55,5 +56,25 @@ func TestCounterConversion(t *testing.T) {
 	m := v.ResourceMetrics[0].ScopeMetrics[0].Metrics[0]
 	if m.Name != "node_cpu_seconds_total" || !m.GetSum().IsMonotonic || m.GetSum().DataPoints[0].GetAsDouble() != 42 || m.GetSum().DataPoints[0].StartTimeUnixNano != 0 {
 		t.Fatal(m)
+	}
+}
+
+func TestMetricSplitShrinksGroupedRequest(t *testing.T) {
+	r := metricRequest(Resource("id", "host", "prod", "svc"), nil)
+	for range 5000 {
+		r.ResourceMetrics[0].ScopeMetrics[0].Metrics = append(r.ResourceMetrics[0].ScopeMetrics[0].Metrics, &metricspb.Metric{Name: "x", Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{DataPoints: []*metricspb.NumberDataPoint{{Value: &metricspb.NumberDataPoint_AsDouble{AsDouble: 1}}}}}})
+	}
+	b, _ := proto.Marshal(r)
+	parts, e := Split("metrics", b)
+	if e != nil || len(parts) != 2 {
+		t.Fatalf("%v", e)
+	}
+	for _, p := range parts {
+		if len(p) >= len(b) || len(p) > MaxBatch {
+			t.Fatal("split expanded")
+		}
+	}
+	if Count("metrics", parts[0])+Count("metrics", parts[1]) != 5000 {
+		t.Fatal("lost points")
 	}
 }
