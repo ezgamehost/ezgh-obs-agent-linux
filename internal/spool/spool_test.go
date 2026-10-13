@@ -140,3 +140,45 @@ func TestQueueReusesAcknowledgedSpace(t *testing.T) {
 		}
 	}
 }
+
+func TestFullQueueReservesSpaceToSplitHead(t *testing.T) {
+	q, e := Open(filepath.Join(t.TempDir(), "q"), "a", 8<<20, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer q.Close()
+	if e = q.Enqueue([][]byte{make([]byte, 1<<20)}, nil); e != nil {
+		t.Fatal(e)
+	}
+	for {
+		e = q.Enqueue([][]byte{make([]byte, 32<<10)}, nil)
+		if errors.Is(e, ErrFull) {
+			break
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	b, e := q.Peek()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = q.Replace(b.ID, [][]byte{make([]byte, 512<<10), make([]byte, 512<<10)}); e != nil {
+		t.Fatalf("full queue cannot split its head: %v", e)
+	}
+	for {
+		b, e := q.Peek()
+		if errors.Is(e, ErrEmpty) {
+			break
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = q.Ack(b.ID); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e = q.Enqueue([][]byte{make([]byte, 1<<20)}, nil); e != nil {
+		t.Fatalf("cannot reuse after split: %v", e)
+	}
+}

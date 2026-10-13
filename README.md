@@ -167,7 +167,7 @@ For macOS development use apple/container, not Docker Compose:
 
 ```sh
 container run -d --name ezgh-linux-agent-build -m 4G -c 4 \
-  -v "$PWD:/src" -w /src golang:1.27-bullseye sleep infinity
+  -v "$PWD:/src" -w /src golang:1.27-bookworm sleep infinity
 container exec ezgh-linux-agent-build sh -c \
   'apt-get update && apt-get install -y libsystemd-dev pkg-config python3 rpm'
 container exec ezgh-linux-agent-build scripts/test.sh

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"github.com/coreos/go-systemd/v22/sdjournal"
 	"github.com/ezgamehost/ezgh-obs-agent-linux/internal/telemetry"
+	"google.golang.org/protobuf/proto"
 	"runtime"
 	"time"
 )
@@ -84,6 +85,7 @@ func Run(ctx context.Context, start string, excluded []string, id, host, env str
 	for ctx.Err() == nil {
 		var rows []*telemetry.LogItem
 		var last []byte
+		batchBytes := 0
 		for i := 0; i < 256; i++ {
 			n, e := j.Next()
 			if e != nil {
@@ -109,7 +111,12 @@ func Run(ctx context.Context, start string, excluded []string, id, host, env str
 			}
 			last, _ = json.Marshal(checkpoint{cursor, t, fields["_BOOT_ID"]})
 			if !exclusions[fields["_SYSTEMD_UNIT"]] {
-				rows = append(rows, Map(fields, time.UnixMicro(int64(t)), id, host, env))
+				item := Map(fields, time.UnixMicro(int64(t)), id, host, env)
+				rows = append(rows, item)
+				batchBytes += proto.Size(item.Record) + proto.Size(item.Resource) + 32
+				if batchBytes >= 256<<10 {
+					break
+				}
 			}
 		}
 		if last != nil {

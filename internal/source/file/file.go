@@ -185,12 +185,14 @@ func (s *Source) Poll(ctx context.Context, now time.Time) error {
 			}
 		}
 		var rows []*telemetry.LogItem
+		batchBytes := 0
 		emit := func() {
 			attrs := map[string]string{"log.file.path": f.path}
 			if f.truncated {
 				attrs["ezgh.log.truncated"] = "true"
 			}
 			body := strings.TrimSuffix(string(f.line), "\r")
+			batchBytes += len(body) + 4096
 			rows = append(rows, &telemetry.LogItem{Resource: telemetry.Resource(s.hostID, s.hostname, s.environment, f.service), Record: telemetry.Log(body, now, 0, attrs)})
 			f.line = nil
 			f.truncated = false
@@ -205,11 +207,12 @@ func (s *Source) Poll(ctx context.Context, now time.Time) error {
 				f.offset++
 				if b == '\n' {
 					emit()
-					if len(rows) >= 256 {
+					if len(rows) >= 256 || batchBytes >= 256<<10 {
 						if e = s.commit(ctx, f, rows); e != nil {
 							return e
 						}
 						rows = nil
+						batchBytes = 0
 					}
 				} else if len(f.line) < 64<<10 {
 					f.line = append(f.line, b)

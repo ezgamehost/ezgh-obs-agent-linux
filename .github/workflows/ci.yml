@@ -15,10 +15,13 @@ jobs:
           - runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
-    container: golang:1.27-bullseye
+    container: debian:bullseye-slim
     steps:
+      - run: apt-get update -qq && apt-get install -y git ca-certificates build-essential libsystemd-dev pkg-config python3 rpm
       - uses: actions/checkout@v4
-      - run: apt-get update -qq && apt-get install -y libsystemd-dev pkg-config python3 rpm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: scripts/test.sh
       - run: scripts/build.sh 0.1.0

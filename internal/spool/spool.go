@@ -96,16 +96,18 @@ func (q *Queue) Close() error { return q.db.Close() }
 
 // Admission reserves B-tree copy-on-write, freelist and split overhead in addition to payload.
 // Pending pages cannot be reused by this transaction and are intentionally not counted.
-func (q *Queue) admit(n int64) error {
+func (q *Queue) admit(n int64) error { return q.admitLimit(n, q.limit-q.maintenance()) }
+func (q *Queue) maintenance() int64  { return min(q.limit/2, 8<<20) }
+func (q *Queue) admitLimit(n, limit int64) error {
 	st, e := os.Stat(q.path)
 	if e != nil {
 		return e
 	}
 	s := q.db.Stats()
-	need := n*4 + (256 << 10) + int64(st.Size()/512)
+	need := n*2 + (256 << 10) + int64(st.Size()/512)
 	free := int64(s.FreePageN) * int64(q.db.Info().PageSize)
 	growth := max(int64(0), need-free)
-	if st.Size()+growth > q.limit {
+	if (growth > 0 && st.Size()+growth > limit) || st.Size()-free+need > limit {
 		return ErrFull
 	}
 	var fs unix.Statfs_t
@@ -131,6 +133,8 @@ func (q *Queue) Enqueue(payloads [][]byte, cp map[string][]byte) error {
 	if e := q.admit(n); e != nil {
 		return e
 	}
+	q.db.MaxSize = int(q.limit - q.maintenance())
+	defer func() { q.db.MaxSize = int(q.limit) }()
 	return q.update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(batches)
 		for _, p := range payloads {
@@ -184,7 +188,7 @@ func (q *Queue) Replace(id []byte, parts [][]byte) error {
 	if len(parts) != 2 || len(id) > 64 {
 		return errors.New("invalid split")
 	}
-	if e := q.admit(int64(len(parts[0]) + len(parts[1]))); e != nil {
+	if e := q.admitLimit(int64(len(parts[0])+len(parts[1])), q.limit); e != nil {
 		return e
 	}
 	return q.update(func(tx *bolt.Tx) error {
