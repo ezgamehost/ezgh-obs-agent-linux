@@ -31,3 +31,30 @@ run for status; the presence of a workflow does not mean it passed.
 
 These are release-hardening tasks, not claims of passing tests. The project should
 be evaluated on test hosts before a broad production rollout.
+
+## Outage/recovery load smoke
+
+Executed against the `06c3588` implementation on Linux arm64 (apple/container,
+Debian 12 userspace), with the default host collectors, a 30-second metric interval,
+a configured 8 MiB log database ceiling, and a local TLS OTLP receiver.
+
+| Measurement | Result |
+| --- | --- |
+| Input period | 60 seconds |
+| Input rate and record size | approximately 1,000 records/second, 1 KiB each |
+| Simulated ingest failure | HTTP 503 for 15 seconds, with Retry-After |
+| Records generated / accepted after recovery | 59,951 / 59,951 |
+| Rejected records | 0 |
+| Peak observed RSS during input | 31,965,184 bytes (30.5 MiB) |
+| Peak observed log database size | 4,259,840 bytes (4.1 MiB), below 8 MiB hard limit |
+| Agent CPU consumed during input | 3.5 CPU-seconds |
+| Final log and metric queues | empty |
+
+The test checks exact record counts, metric delivery, queue size and a 150 MiB RSS
+ceiling. This is a short load smoke test, not the proposed 30-minute qualification
+or a production performance claim. Reproduce on Linux with:
+
+```sh
+go build -o /tmp/ezgh-agent-load ./cmd/ezgh-obs-agent-linux
+python3 scripts/load-smoke.py /tmp/ezgh-agent-load 60
+```
