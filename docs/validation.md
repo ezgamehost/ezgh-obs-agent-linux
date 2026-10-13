@@ -16,10 +16,12 @@ used for testing.
 
 ## CI qualification
 
-The CI workflow builds native Linux amd64 and arm64 packages and runs real-systemd
-journal/metrics TLS forwarding, non-root execution, reload, restart, package upgrade
-and removal on Ubuntu 22.04 amd64 and Ubuntu 24.04 arm64. Refer to the actual Actions
-run for status; the presence of a workflow does not mean it passed.
+The [CI run for `06c3588`](https://github.com/ezgamehost/ezgh-obs-agent-linux/actions/runs/38340983655)
+passed all four jobs: native Linux amd64/arm64 race tests, vet and package builds,
+plus real-systemd journal/metrics TLS forwarding, non-root execution, reload,
+restart, package upgrade and removal on Ubuntu 22.04 amd64 and Ubuntu 24.04 arm64.
+The [v0.1.0 preview](https://github.com/ezgamehost/ezgh-obs-agent-linux/releases/tag/v0.1.0)
+contains those exact build artifacts; downloaded checksums were verified before publication.
 
 ## Remaining qualification
 

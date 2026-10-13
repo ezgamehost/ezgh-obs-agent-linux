@@ -38,7 +38,7 @@ Execution is inline, with an independent final code review. Main is the establis
   file rename/truncate/restart/long lines, and exact node gauge/counter conversion.
 - [x] 5. Runtime/CLI: internal/app, internal/diagnostics, cmd/ezgh-obs-agent-linux;
   tests for state locking, local status, graceful stop, configuration validation and doctor.
-- [ ] 6. Packaging/qualification: packaging, scripts, .github/workflows, README;
+- [x] 6. Packaging/qualification: packaging, scripts, .github/workflows, README;
   Linux race/vet/build, end-to-end daemon smoke, distribution package lifecycle,
   resource benchmark and final review. Document precisely any unavailable qualification.
 
@@ -49,3 +49,7 @@ Implementation ruling: upstream netstat/vmstat emit untyped families. Preserve
 their raw values as OTLP gauges with unchanged names; do not infer counter semantics.
 Queue admission reserves maintenance capacity, while bbolt MaxSize enforces the
 physical file ceiling. Source commits are bounded independently of operator budgets.
+
+Initial implementation and preview publication are complete. The exact CI run,
+load results and remaining broader release qualification are recorded in
+[validation](../../validation.md).

@@ -29,8 +29,8 @@ V1 includes journald, explicitly configured text files, host metrics, durable
 delivery and agent health. Application OTLP reception, traces, container discovery,
 remote configuration, automatic updates, fleet management, new backend routes and
 new console pages are outside this design. The existing Kubernetes agent remains
-an independent product. The future implementation belongs in a separate
-`ezgh-obs-agent-linux` repository; this spec lives beside the backend designs.
+an independent product. The implementation lives in this separate `ezgh-obs-agent-linux` repository.
+The original proposal also lives beside the EZGH backend designs.
 
 ## Process and package boundaries
 

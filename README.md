@@ -14,7 +14,8 @@ the Kubernetes `ezgh-obs-agent` chart. There is no remote control or self-update
 
 ## Install
 
-Download the package matching your architecture from a verified build's artifacts.
+Download the package matching your architecture from the
+[v0.1.0 preview release](https://github.com/ezgamehost/ezgh-obs-agent-linux/releases/tag/v0.1.0).
 Verify its SHA-256 against the accompanying `SHA256SUMS` before installing:
 
 ```sh
