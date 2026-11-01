@@ -38,8 +38,12 @@ type Outcome struct {
 type Client struct {
 	endpoint string
 	http     *http.Client
-	mu       sync.RWMutex
-	key      string
+	// DropForbidden makes a 403 final for its batch instead of a pause: nobody is there to fix a
+	// Bot's file, and a refused signal must not fill the disk. Set before the first Send.
+	DropForbidden bool
+	mu            sync.RWMutex
+	key, project  string
+	noBot         bool
 }
 
 func New(endpoint, caFile, key string) (*Client, error) {
@@ -68,19 +72,35 @@ func NewWithClient(endpoint string, h *http.Client, key string) *Client {
 	return &Client{endpoint: strings.TrimSuffix(endpoint, "/"), http: &copy, key: key}
 }
 func (c *Client) SetCredential(key string) { c.mu.Lock(); defer c.mu.Unlock(); c.key = key }
+
+// SetProject names the project on requests made with an API key.
+func (c *Client) SetProject(project string) { c.mu.Lock(); defer c.mu.Unlock(); c.project = project }
+
+// SetNoBot records that the instance has no Bot: Send drops without touching the network.
+func (c *Client) SetNoBot(noBot bool) { c.mu.Lock(); defer c.mu.Unlock(); c.noBot = noBot }
 func (c *Client) Send(ctx context.Context, signal string, payload []byte) Outcome {
 	if signal != "logs" && signal != "metrics" {
 		return Outcome{Kind: Drop, Reason: "signal"}
+	}
+	c.mu.RLock()
+	key, project, noBot := c.key, c.project, c.noBot
+	c.mu.RUnlock()
+	if noBot {
+		return Outcome{Kind: Drop, Reason: "no_bot"}
+	}
+	if key == "" {
+		return Outcome{Kind: Pause, Reason: "credential"}
 	}
 	req, e := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+"/v1/"+signal, bytes.NewReader(payload))
 	if e != nil {
 		return Outcome{Kind: Pause, Reason: "endpoint"}
 	}
-	c.mu.RLock()
-	req.Header.Set("Authorization", "Bearer "+c.key)
-	c.mu.RUnlock()
+	req.Header.Set("Authorization", "Bearer "+key)
+	if project != "" && !strings.HasPrefix(key, "ezgh_ik_") {
+		req.Header.Set("x-ezgh-project", project)
+	}
 	req.Header.Set("Content-Type", "application/x-protobuf")
-	req.Header.Set("User-Agent", "ezgh-obs-agent-linux/0.1")
+	req.Header.Set("User-Agent", "ezgh-obs-agent-linux/0.2")
 	resp, e := c.http.Do(req)
 	if e != nil {
 		return Outcome{Kind: Retry, Reason: "network"}
@@ -90,6 +110,8 @@ func (c *Client) Send(ctx context.Context, signal string, payload []byte) Outcom
 	switch {
 	case code == 429 || code == 502 || code == 503 || code == 504:
 		return Outcome{Kind: Retry, After: retryAfter(resp.Header.Get("Retry-After")), Reason: "upstream"}
+	case code == 403 && c.DropForbidden:
+		return Outcome{Kind: Drop, Reason: "permission"}
 	case code == 401 || code == 403:
 		return Outcome{Kind: Pause, Reason: "credential"}
 	case code == 404 || code >= 300 && code < 400:

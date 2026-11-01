@@ -3,7 +3,6 @@ package config
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -34,7 +33,9 @@ type Config struct {
 	Target         string `yaml:"target"`
 	Endpoint       string `yaml:"endpoint"`
 	Environment    string `yaml:"environment"`
+	Credential     string `yaml:"credential"`
 	CredentialFile string `yaml:"credential_file"`
+	Project        string `yaml:"project"`
 	StateDir       string `yaml:"state_dir"`
 	CAFile         string `yaml:"ca_file"`
 	HostID         string `yaml:"host_id"`
@@ -63,6 +64,14 @@ type Config struct {
 
 var DefaultCollectors = []string{"cpu", "meminfo", "loadavg", "diskstats", "filesystem", "netdev", "netstat", "stat", "time", "uname", "vmstat", "os"}
 var environmentRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+var projectRE = regexp.MustCompile(`^prj_[a-z0-9]{12}$`)
+var keyRE = regexp.MustCompile(`^(ezgh_ik_[a-zA-Z0-9]{43}|ezgh_[a-zA-Z0-9]{40})$`)
+
+// CredentialMetadata takes the key of the Bot attached to this instance from the metadata service.
+const CredentialMetadata = "metadata"
+
+// IsProject reports whether v is a project's prefixed ID.
+func IsProject(v string) bool { return projectRE.MatchString(v) }
 
 func Parse(r io.Reader) (Config, error) {
 	var c Config
@@ -100,8 +109,23 @@ func Parse(r io.Reader) (Config, error) {
 		return c, errors.New("endpoint must be an HTTPS origin without credentials, path, query or fragment")
 	}
 	c.Endpoint = strings.TrimSuffix(c.Endpoint, "/")
-	if !filepath.IsAbs(c.StateDir) || !filepath.IsAbs(c.CredentialFile) {
-		return c, errors.New("state_dir and credential_file must be absolute paths")
+	if !filepath.IsAbs(c.StateDir) {
+		return c, errors.New("state_dir must be an absolute path")
+	}
+	switch c.Credential {
+	case "":
+		if !filepath.IsAbs(c.CredentialFile) {
+			return c, errors.New("credential_file must be an absolute path, or set credential: metadata")
+		}
+		if c.Project != "" && !IsProject(c.Project) {
+			return c, errors.New("project must be a prj_ ID")
+		}
+	case CredentialMetadata:
+		if c.CredentialFile != "" || c.Project != "" || c.HostID != "" {
+			return c, errors.New("credential: metadata excludes credential_file, project and host_id: the instance supplies them")
+		}
+	default:
+		return c, errors.New("credential must be metadata, or left out to use credential_file")
 	}
 	if c.HostID != "" && (len(c.HostID) > 128 || strings.TrimSpace(c.HostID) != c.HostID || strings.ContainsAny(c.HostID, "\r\n\x00")) {
 		return c, errors.New("invalid host_id")
@@ -172,6 +196,19 @@ func Load(path string) (Config, error) {
 	defer f.Close()
 	return Parse(f)
 }
+
+// ReadKey reads credential_file and checks it against project: an API key has to name its project,
+// and a project ingest key already does.
+func (c Config) ReadKey() (string, error) {
+	key, e := ReadCredential(c.CredentialFile)
+	if e != nil {
+		return "", e
+	}
+	if apiKey := !strings.HasPrefix(key, "ezgh_ik_"); apiKey != (c.Project != "") {
+		return "", errors.New("an API key requires project, and a project ingest key refuses it")
+	}
+	return key, nil
+}
 func ReadCredential(path string) (string, error) {
 	st, e := os.Lstat(path)
 	if e != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0137 != 0 {
@@ -191,8 +228,8 @@ func ReadCredential(path string) (string, error) {
 		return "", errors.New("cannot read credential")
 	}
 	v := strings.TrimSpace(string(b))
-	if !regexp.MustCompile(`^ezgh_ik_[a-zA-Z0-9]{43}$`).MatchString(v) {
-		return "", fmt.Errorf("invalid project ingest key format")
+	if !keyRE.MatchString(v) {
+		return "", errors.New("credential must be an ezgh_ API key or a project ingest key")
 	}
 	return v, nil
 }

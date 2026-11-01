@@ -47,3 +47,63 @@ func TestCredentialPermissions(t *testing.T) {
 		t.Fatal("accepted symlink")
 	}
 }
+
+const apiKey = "ezgh_0123456789abcdefghijABCDEFGHIJ0123456789"
+
+var ingestKey = "ezgh_ik_" + strings.Repeat("a", 43)
+
+const project = "prj_g7h8i9j0k1l2"
+
+func TestCredentialModes(t *testing.T) {
+	head := "version: 1\ntarget: prod\nenvironment: production\n"
+	c, err := Parse(strings.NewReader(head + "credential: metadata\n"))
+	if err != nil || c.Credential != CredentialMetadata || c.CredentialFile != "" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	if _, err := Parse(strings.NewReader(base + "project: " + project + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	for name, doc := range map[string]string{
+		"metadata with credential_file": base + "credential: metadata\n",
+		"metadata with project":         head + "credential: metadata\nproject: " + project + "\n",
+		"metadata with host_id":         head + "credential: metadata\nhost_id: fixed\n",
+		"unknown credential mode":       head + "credential: file\n",
+		"no credential at all":          head,
+		"project not a prj_ ID":         base + "project: my-project\n",
+		"project a UUID":                base + "project: 2b5f2a64-1f6b-4d7e-9b53-3a1f8a8c5b11\n",
+	} {
+		if _, err := Parse(strings.NewReader(doc)); err == nil {
+			t.Errorf("accepted %s", name)
+		}
+	}
+}
+
+func TestReadCredentialShapes(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "key")
+	for _, key := range []string{ingestKey, apiKey} {
+		os.WriteFile(p, []byte(key+"\n"), 0600)
+		if got, err := ReadCredential(p); err != nil || got != key {
+			t.Fatalf("%q %v", got, err)
+		}
+	}
+	for _, bad := range []string{"ezgh_at_" + strings.Repeat("a", 37), "ezgh_" + strings.Repeat("a", 39), "ezgh_" + strings.Repeat("a", 41), "ezgh_ik_" + strings.Repeat("a", 42), "ezgh_sat_" + strings.Repeat("a", 43)} {
+		os.WriteFile(p, []byte(bad), 0600)
+		if _, err := ReadCredential(p); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
+func TestKeyMustMatchProject(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "key")
+	for _, tc := range []struct {
+		key, project string
+		ok           bool
+	}{{ingestKey, "", true}, {ingestKey, project, false}, {apiKey, project, true}, {apiKey, "", false}} {
+		os.WriteFile(p, []byte(tc.key), 0600)
+		_, err := Config{CredentialFile: p, Project: tc.project}.ReadKey()
+		if (err == nil) != tc.ok {
+			t.Errorf("%.8s with project %q: %v", tc.key, tc.project, err)
+		}
+	}
+}
