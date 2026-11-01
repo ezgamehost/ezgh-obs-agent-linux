@@ -2,6 +2,8 @@ version: 1
 target: production-hosts
 endpoint: https://obs-ingest.ezghcloud.com
 environment: production
+# A project ingest key, or an ezgh_ API key with `project: prj_…` beside it. On an EZGH Compute
+# instance, replace this with `credential: metadata` to use the Bot attached to the instance.
 credential_file: /etc/ezgh-obs-agent-linux/ingest-key
 state_dir: /var/lib/ezgh-obs-agent-linux
 metrics:

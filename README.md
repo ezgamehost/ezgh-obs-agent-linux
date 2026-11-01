@@ -64,6 +64,48 @@ sudo -u ezgh-obs-agent ezgh-obs-agent-linux doctor
 running daemon's private Unix status socket. No diagnostic probe telemetry is sent.
 The service's own diagnostics go to journald and are excluded from forwarding by default.
 
+### Using an API key
+
+Any `ezgh_` API key can replace the ingest key. Put it in the same restricted file and
+name the project, which an API key doesn't select by itself:
+
+```yaml
+credential_file: /etc/ezgh-obs-agent-linux/api-key
+project: prj_g7h8i9j0k1l2
+```
+
+The key's owner needs `ObsIngestAccess`, or the `obs.logs.ingest` and
+`obs.metrics.ingest` actions, on that project. `project` is refused with an ingest key.
+
+### On an EZGH Compute instance
+
+`linux/ezgh-*` images ship the agent configured with the instance's Bot:
+
+```yaml
+version: 1
+target: ezgh-instance
+environment: production
+credential: metadata
+```
+
+`credential: metadata` excludes `credential_file`, `project` and `host_id`, and it's a
+startup error anywhere else: the instance supplies its key, project and ID. Attach a Bot
+with `ObsIngestAccess` and metrics and logs start within about 3 minutes, labelled with
+the `ins_` ID as `host.id` and `service.instance.id`. With no Bot the agent stays idle:
+it collects nothing and keeps retrying. `doctor` shows the instance, project and whether a
+Bot is present, never a key. The package's unit requires the ingest key file, so a
+hand-installed metadata setup needs a drop-in that resets it:
+
+```ini
+# /etc/systemd/system/ezgh-obs-agent-linux.service.d/metadata.conf
+[Unit]
+ConditionPathExists=
+```
+
+Keys are short-lived and replaced in the background; SIGHUP does nothing in this mode.
+An instance needs a route to the ingest endpoint. Instances with only IPv6, and private
+instances with no gateway, stay idle or retry within their queue limits.
+
 ## Collection and identity
 
 Metrics collect every 30 seconds with an initial randomized delay. The default
@@ -124,7 +166,12 @@ outage buffer or exactly-once guarantee.
 
 Transient network failures and HTTP 429/502/503/504 retry with jitter and
 `Retry-After`. Authentication failures retain data and pause until credential reload.
-Partial OTLP success acknowledges the batch and counts rejected items without
+With `credential: metadata`, a 401 or a metadata outage retains data the same way, and
+sending resumes with the next key. A 403 drops the batch and sets that signal's state to
+`rejected:permission:obs.<signal>.ingest`, so a Bot allowed metrics but not logs sends
+metrics and drops logs, and sending resumes once permission is granted. With no Bot
+attached, batches drop without any network request (`rejected:no_bot`) and checkpoints
+keep advancing, so attaching a Bot leaves no backlog. Partial OTLP success acknowledges the batch and counts rejected items without
 replaying accepted ones. Permanent payload errors are counted and discarded.
 
 ```sh
@@ -135,13 +182,14 @@ sudo systemctl restart ezgh-obs-agent-linux
 ```
 
 `target` is an operator-assigned installation destination name, not a credential.
-Changing it, the endpoint, environment, or host identity with pending data is
+Changing it, the endpoint, environment, `project` or host identity with pending data is
 rejected. Keep the same target only when rotating a key for the same project. The
 agent cannot infer the project from an opaque key. Moving projects requires draining
 the old queue or choosing a new state directory.
 
 Preserve `/var/lib/ezgh-obs-agent-linux` through upgrades. Do not bake its contents
-into VM images: each clone needs a new ID and empty state. Corrupt/unknown-format
+into VM images: each clone needs a new ID and empty state. With `credential: metadata`
+queues live in `<state_dir>/<ins_id>/`, so a clone of an instance's disk starts clean. Corrupt/unknown-format
 queues are never silently deleted. Package removal preserves state and the credential;
 retiring an installation requires explicit cleanup. Configured `host_id` overrides
 the generated ID and must be unique per host.

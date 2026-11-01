@@ -64,11 +64,14 @@ transaction. One process exclusively locks the state directory.
 
 ## Host identity and routing
 
-One installation targets one project and one environment. The ingest key selects
-the project; the agent overwrites `ezgh.metadata.environment` with the configured
+One installation targets one project and one environment. An ingest key selects the
+project; an API key names it with `project`, and metadata mode takes it from the
+instance. Every request made with an API key carries it in `x-ezgh-project`. The agent
+overwrites `ezgh.metadata.environment` with the configured
 environment, validated as `[a-z0-9][a-z0-9._-]{0,62}`.
 
-Use a configured `host.id`, or generate a random UUID on first start and persist it
+In metadata mode the ID is the instance's `ins_` ID. Otherwise
+use a configured `host.id`, or generate a random UUID on first start and persist it
 with an atomic write and directory sync. Do not send raw machine-id. Preserve state
 through upgrades; do not bake generated state into machine images. Cloned state
 must be removed before first boot or replaced with an explicitly unique ID.
@@ -206,7 +209,10 @@ allows 5 MiB wire / 64 MiB decoded requests and 64 KiB log bodies.
 | Complete OTLP success | Durably acknowledge batch |
 | OTLP partial success | Acknowledge batch, count rejected items, surface bounded diagnostic; do not replay accepted items |
 | Network error, HTTP 429/502/503/504 | Retry with exponential backoff and full jitter, 1 second to 60 seconds; honor longer valid Retry-After |
-| HTTP 401/403 | Retain queue, pause exports until credential reload; expose authentication failure |
+| HTTP 401 | Retain queue, pause exports until a new credential; expose authentication failure |
+| HTTP 403 | With `credential_file`, as 401. In metadata mode, drop the batch, count it as rejected and name the missing action in the signal's state |
+| No Bot (metadata service's `no_bot`) | Drop every batch without touching the network; checkpoints keep advancing |
+| No key (none yet, or expired during a metadata outage) | Retain queue, pause exports until a key arrives |
 | HTTP 404 or unsupported protocol | Retain queue, pause exports until configuration correction |
 | HTTP 413 | Split batch durably; reject and count an indivisible record if still refused |
 | Other permanent protocol rejection | Count dropped items and acknowledge offending batch; never log body or credentials |
@@ -216,11 +222,43 @@ specification's classification for malformed responses. Never forward credential
 across HTTP redirects; reject redirects. TLS verification is mandatory outside
 tests, with an optional CA file. Proxy support uses the standard Go HTTP transport.
 
-Store a binding of destination, environment and explicit installation target name
-alongside queues. Refuse to reuse nonempty queues if this binding changes. A key
-rotation keeps the same target name; moving to another project requires a new
-state directory or draining the old one. The opaque key cannot tell the agent
-whether two credentials select the same project; document this operator obligation.
+Store a binding of destination, environment, explicit installation target name and,
+when one is set, `project` alongside queues. Refuse to reuse nonempty queues if this
+binding changes. A key rotation keeps the same target name; moving to another project
+requires a new state directory or draining the old one. An opaque ingest key cannot tell
+the agent whether two credentials select the same project; document this operator
+obligation.
+
+## Metadata mode
+
+`credential: metadata` runs from the key of the Bot attached to a compute instance.
+`internal/credential` is a copy of ezgh-fleets-agent's provider: a session token, a key
+used until 5 minutes before it expires, the old key kept while a refresh fails, and a
+3-minute retry while there's no Bot. Off EZGH Compute (the DMI product name) it's a
+startup error.
+
+A Bot that can't send is a permission fact, not an outage. Its data is dropped rather
+than spooled: spooling would hold the customer's disk, then bill them for a backlog the
+moment permission arrives. So a 403 and the `no_bot` answer drop, and they are the only
+authentication outcomes that do. A 401 can be a key rotating with a batch in flight, and
+a metadata outage says nothing about the Bot, so both keep the batch.
+
+The agent never exits over an unanswered metadata service, since a boot can beat it. The
+lock and status socket sit at the top of `state_dir`, so `doctor` works before the
+instance ID is known. Until the first key the daemon holds nothing else: sources and
+queues start with it, so a Bot-less instance writes no data and journal `start_at: end`
+begins at that moment. Queues and checkpoints live in `<state_dir>/<ins_id>/`, so a clone
+of the disk starts clean rather than failing the binding check or sending the original's
+data under a new identity. An instance whose directory already exists has sent before:
+told there's no Bot at start, it runs sources and drops, as on a live detach, because
+stopped sources would leave a checkpoint gap that the next Bot would send and be billed
+for.
+
+Each new key takes the reload path (`SetCredential`, then the generation counter), which
+wakes a paused export. Metadata mode has no credential file, so SIGHUP does nothing. A
+`project` that isn't a `prj_` ID (older instance definitions) leaves the agent idle with
+the state `idle:project_not_prefixed`. Other `credential` states are `loaded`, `no_bot` and
+`waiting:metadata`.
 
 ## Configuration and commands
 
@@ -246,19 +284,23 @@ logs:
 
 Unknown keys, invalid environment, empty target, invalid durations and overlapping
 file source definitions fail validation. At least one signal must be enabled.
-Accept credentials only from a restricted regular file, never a CLI token argument.
+Accept credentials only from a restricted regular file or the metadata service, never a
+CLI token argument.
 An owner-created file readable by the service user (0600 or root/service-group 0640)
 is the normal installation path. Do not print credentials, payloads or full
 configuration in errors.
 
 Commands are `run --config`, `validate --config`, `version` and `doctor --config`.
 Validate checks syntax without sending telemetry. Doctor checks permissions,
-libsystemd, writable state and local status; it does not emit probe telemetry or
+libsystemd, writable state and local status, and in metadata mode reports the instance,
+project and whether a Bot is present; it does not emit probe telemetry or
 modify source checkpoints. Run publishes a bounded status snapshot over a
 permission-restricted Unix socket for doctor, independent of collection. No TCP
 listener is enabled in v1.
 
-SIGHUP reloads only the credential file and resumes a paused authentication export;
+The credential is `credential_file` (a project ingest key, or an `ezgh_` API key with
+`project: prj_…`) or `credential: metadata`. SIGHUP reloads only the credential file and
+resumes a paused authentication export;
 other configuration changes require restart. SIGTERM stops readers, commits their
 pending accepted work, permits up to 20 seconds for delivery, closes storage and
 exits; any undelivered committed batches survive. Systemd StopTimeout is 30 seconds.
@@ -278,7 +320,8 @@ ProtectHome and a writable StateDirectory. Do not hide `/proc`, `/sys` or the ho
 mount table needed by collectors. Verify filesystem metrics through the hardened
 unit, because mount namespace hardening can change what collectors observe.
 
-The agent starts only after a credential and valid configuration are supplied.
+The packaged unit starts only once the ingest key file exists. Compute images reset that
+condition with a drop-in, since metadata mode has no file.
 Upgrades preserve identity, queues and checkpoints. Uninstall preserves state;
 explicit package purge is destructive. Version queue formats and refuse an
 unsupported future format on downgrade. No self-updater or remote command channel.
