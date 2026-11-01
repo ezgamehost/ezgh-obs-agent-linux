@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ezgamehost/ezgh-obs-agent-linux/internal/config"
+	"github.com/ezgamehost/ezgh-obs-agent-linux/internal/credential"
 	"github.com/ezgamehost/ezgh-obs-agent-linux/internal/diagnostics"
 	exporter "github.com/ezgamehost/ezgh-obs-agent-linux/internal/export"
 	"github.com/ezgamehost/ezgh-obs-agent-linux/internal/identity"
@@ -21,13 +22,22 @@ import (
 	"time"
 )
 
-func lockState(dir string) (*os.File, error) {
+// keyPoll is how often the agent asks for its key. Metadata decides when that reaches the service.
+var keyPoll = 30 * time.Second
+
+func privateDir(dir string) error {
 	if e := os.MkdirAll(dir, 0700); e != nil {
-		return nil, e
+		return e
 	}
 	st, e := os.Lstat(dir)
 	if e != nil || !st.IsDir() || st.Mode().Perm()&0077 != 0 {
-		return nil, errors.New("state directory must be a private directory (0700)")
+		return errors.New("state directory must be a private directory (0700)")
+	}
+	return nil
+}
+func lockState(dir string) (*os.File, error) {
+	if e := privateDir(dir); e != nil {
+		return nil, e
 	}
 	p := filepath.Join(dir, "agent.lock")
 	if st, e := os.Lstat(p); e == nil && !st.Mode().IsRegular() {
@@ -43,21 +53,85 @@ func lockState(dir string) (*os.File, error) {
 	}
 	return f, nil
 }
+
+// credentialState is what the status socket and doctor show for the last answer about the key.
+func credentialState(e error) string {
+	switch {
+	case e == nil:
+		return "loaded"
+	case errors.Is(e, credential.ErrNoBot):
+		return "no_bot"
+	case errors.Is(e, credential.ErrNoProject):
+		return "idle:project_not_prefixed"
+	}
+	return "waiting:metadata"
+}
+
+// awaitKey holds a metadata-mode agent idle, writing nothing, until the instance has a key. It
+// never gives up on the metadata service: a boot can beat it, and a Bot can be attached at any
+// time. The exception is an instance that has already sent, whose state directory exists: told
+// there's no Bot, it carries on with no key, so sources keep moving their checkpoints and dropping
+// as they do on a live detach. Waiting there would send the whole gap once a Bot came back.
+func awaitKey(ctx context.Context, m *credential.Metadata, stateDir string, state *diagnostics.State) (id, project, key string, e error) {
+	for {
+		if id, project, e = m.Instance(ctx); e == nil {
+			state.Set("instance", id)
+			state.Set("project", project)
+			if key, e = m.Key(ctx); e == nil {
+				state.Set("credential", credentialState(nil))
+				return id, project, key, nil
+			}
+			if _, err := os.Stat(filepath.Join(stateDir, id)); err == nil && errors.Is(e, credential.ErrNoBot) {
+				state.Set("credential", credentialState(e))
+				return id, project, "", nil
+			}
+		}
+		state.Set("credential", credentialState(e))
+		if !sleep(ctx, keyPoll) {
+			return "", "", "", ctx.Err()
+		}
+	}
+}
 func Run(ctx context.Context, c config.Config, reload <-chan os.Signal) error {
+	return run(ctx, c, reload, &credential.Metadata{})
+}
+func run(ctx context.Context, c config.Config, reload <-chan os.Signal, m *credential.Metadata) error {
+	metadata := c.Credential == config.CredentialMetadata
+	if metadata && !m.Available() {
+		return errors.New("credential: metadata works only on an EZGH Compute instance")
+	}
 	lock, e := lockState(c.StateDir)
 	if e != nil {
 		return e
 	}
 	defer lock.Close()
-	id, e := identity.Load(c.StateDir, c.HostID)
+	state := diagnostics.New()
+	closeStatus, e := state.Serve(filepath.Join(c.StateDir, "status.sock"))
 	if e != nil {
 		return e
+	}
+	defer closeStatus()
+	var id, project, key string
+	dir := c.StateDir
+	if metadata {
+		if id, project, key, e = awaitKey(ctx, m, c.StateDir, state); e != nil {
+			return nil // stopped while idle
+		}
+		// A clone of this disk has a new ID, so it starts clean rather than sending this state.
+		dir = filepath.Join(c.StateDir, id)
+		if e = privateDir(dir); e != nil {
+			return e
+		}
+	} else {
+		if id, e = identity.Load(c.StateDir, c.HostID); e != nil {
+			return e
+		}
+		if key, e = c.ReadKey(); e != nil {
+			return e
+		}
+		project = c.Project
 	}
 	hostname, e := os.Hostname()
-	if e != nil {
-		return e
-	}
-	key, e := config.ReadCredential(c.CredentialFile)
 	if e != nil {
 		return e
 	}
@@ -65,23 +139,24 @@ func Run(ctx context.Context, c config.Config, reload <-chan os.Signal) error {
 	if e != nil {
 		return e
 	}
+	client.SetProject(project)
+	client.DropForbidden = metadata
+	client.SetNoBot(metadata && key == "")
 	binding := c.Target + "|" + c.Endpoint + "|" + c.Environment + "|" + id
-	lq, e := spool.Open(filepath.Join(c.StateDir, "logs.db"), binding, c.Storage.LogBytes, c.Storage.ReserveBytes)
+	if project != "" {
+		// Only then: a changed binding refuses to start, and ingest-key queues predate this.
+		binding += "|" + project
+	}
+	lq, e := spool.Open(filepath.Join(dir, "logs.db"), binding, c.Storage.LogBytes, c.Storage.ReserveBytes)
 	if e != nil {
 		return e
 	}
 	defer lq.Close()
-	mq, e := spool.Open(filepath.Join(c.StateDir, "metrics.db"), binding, c.Storage.MetricBytes, c.Storage.ReserveBytes)
+	mq, e := spool.Open(filepath.Join(dir, "metrics.db"), binding, c.Storage.MetricBytes, c.Storage.ReserveBytes)
 	if e != nil {
 		return e
 	}
 	defer mq.Close()
-	state := diagnostics.New()
-	closeStatus, e := state.Serve(filepath.Join(c.StateDir, "status.sock"))
-	if e != nil {
-		return e
-	}
-	defer closeStatus()
 	sourceCtx, stopSources := context.WithCancel(ctx)
 	defer stopSources()
 	deliveryCtx, stopDelivery := context.WithCancel(context.Background())
@@ -159,6 +234,27 @@ func Run(ctx context.Context, c config.Config, reload <-chan os.Signal) error {
 	if c.Metrics.Enabled {
 		start(&sources, func() error { return collectMetrics(sourceCtx, c, id, hostname, mq, state) })
 	}
+	if metadata {
+		reload = nil // no credential file to read again
+		start(&sources, func() error {
+			current, noBot := key, key == ""
+			for sleep(sourceCtx, keyPoll) {
+				k, e := m.Key(sourceCtx)
+				if sourceCtx.Err() != nil {
+					break // says nothing about the key, and the drain below still needs it
+				}
+				bot := errors.Is(e, credential.ErrNoBot)
+				if k != current || bot != noBot {
+					client.SetNoBot(bot)
+					client.SetCredential(k)
+					generation.Add(1)
+					current, noBot = k, bot
+				}
+				state.Set("credential", credentialState(e))
+			}
+			return nil
+		})
+	}
 	start(&sources, func() error {
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
@@ -167,7 +263,7 @@ func Run(ctx context.Context, c config.Config, reload <-chan os.Signal) error {
 			case <-sourceCtx.Done():
 				return nil
 			case <-reload:
-				k, e := config.ReadCredential(c.CredentialFile)
+				k, e := c.ReadKey()
 				if e != nil {
 					state.Set("credential", "reload_failed")
 					continue

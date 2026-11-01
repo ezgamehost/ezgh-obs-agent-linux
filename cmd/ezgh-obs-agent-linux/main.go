@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/ezgamehost/ezgh-obs-agent-linux/internal/app"
 	"github.com/ezgamehost/ezgh-obs-agent-linux/internal/config"
+	"github.com/ezgamehost/ezgh-obs-agent-linux/internal/credential"
 	"github.com/ezgamehost/ezgh-obs-agent-linux/internal/diagnostics"
 	"github.com/ezgamehost/ezgh-obs-agent-linux/internal/source/journal"
 	"golang.org/x/sys/unix"
@@ -20,6 +22,29 @@ var version = "dev"
 var commit = "unknown"
 
 func main() { os.Exit(execute(os.Args[1:], os.Stdout, os.Stderr)) }
+
+// metadataChecks reports the instance, its project and whether a Bot is attached, never the key.
+// No Bot is a working state, not a failure.
+func metadataChecks(ctx context.Context, m *credential.Metadata, checks map[string]string, record func(string, error)) {
+	if !m.Available() {
+		record("credential", errors.New("credential: metadata works only on an EZGH Compute instance"))
+		return
+	}
+	id, project, e := m.Instance(ctx)
+	record("credential", e)
+	if e != nil {
+		return
+	}
+	checks["instance"], checks["project"] = id, project
+	switch _, e = m.Key(ctx); {
+	case e == nil:
+		checks["bot"] = "present"
+	case errors.Is(e, credential.ErrNoBot):
+		checks["bot"] = "absent"
+	default:
+		record("bot", e)
+	}
+}
 func execute(args []string, out, errOut io.Writer) int {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
 		fmt.Fprintln(out, "Usage: ezgh-obs-agent-linux {run|validate|doctor} [--config PATH]\n       ezgh-obs-agent-linux version")
@@ -61,8 +86,12 @@ func execute(args []string, out, errOut io.Writer) int {
 				checks[name] = "ok"
 			}
 		}
-		_, e := config.ReadCredential(c.CredentialFile)
-		record("credential", e)
+		if c.Credential == config.CredentialMetadata {
+			metadataChecks(context.Background(), &credential.Metadata{}, checks, record)
+		} else {
+			_, e := c.ReadKey()
+			record("credential", e)
+		}
 		record("state_writable", unix.Access(c.StateDir, unix.W_OK))
 		if c.Logs.Journal.Enabled {
 			record("journal", journal.Available())

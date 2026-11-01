@@ -14,10 +14,11 @@ import (
 
 func deliver(ctx context.Context, signal string, q *spool.Queue, client *exporter.Client, state *diagnostics.State, generation *atomic.Uint64) error {
 	delay := time.Second
+	idle := "idle" // a refusal stays readable on an empty queue until a batch gets through
 	for ctx.Err() == nil {
 		b, e := q.Peek()
 		if errors.Is(e, spool.ErrEmpty) {
-			state.Set(signal, "idle")
+			state.Set(signal, idle)
 			if !sleep(ctx, 100*time.Millisecond) {
 				break
 			}
@@ -42,13 +43,21 @@ func deliver(ctx context.Context, signal string, q *spool.Queue, client *exporte
 			state.Add(signal+"_exported", count-rejected)
 			state.Gauge(signal+"_last_success_unixtime", float64(time.Now().Unix()))
 			state.Set(signal, "ready")
+			idle = "idle"
 			delay = time.Second
 		case exporter.Drop:
 			if e = q.Ack(b.ID); e != nil {
 				return e
 			}
 			state.Add(signal+"_rejected", count)
-			state.Set(signal, "rejected:"+o.Reason)
+			rejected := "rejected:" + o.Reason
+			if o.Reason == "permission" {
+				rejected += ":obs." + signal + ".ingest"
+			}
+			if o.Reason == "permission" || o.Reason == "no_bot" {
+				idle = rejected
+			}
+			state.Set(signal, rejected)
 			delay = time.Second
 		case exporter.Split:
 			parts, e := telemetry.Split(signal, b.Payload)
