@@ -12,9 +12,16 @@ import (
 	"time"
 )
 
+// refusedCooldown is how long a signal drops locally after a 403, so a refused host doesn't ask
+// org-api about every batch.
+const refusedCooldown = 10 * time.Second
+
+var clock = time.Now
+
 func deliver(ctx context.Context, signal string, q *spool.Queue, client *exporter.Client, state *diagnostics.State, generation *atomic.Uint64) error {
 	delay := time.Second
 	idle := "idle" // a refusal stays readable on an empty queue until a batch gets through
+	var cooling time.Time
 	for ctx.Err() == nil {
 		b, e := q.Peek()
 		if errors.Is(e, spool.ErrEmpty) {
@@ -27,12 +34,19 @@ func deliver(ctx context.Context, signal string, q *spool.Queue, client *exporte
 		if e != nil {
 			return e
 		}
+		count := uint64(telemetry.Count(signal, b.Payload))
+		if clock().Before(cooling) {
+			if e = q.Ack(b.ID); e != nil {
+				return e
+			}
+			state.Add(signal+"_rejected", count)
+			continue
+		}
 		gen := generation.Load()
 		o := client.Send(ctx, signal, b.Payload)
 		if ctx.Err() != nil {
 			break
 		}
-		count := uint64(telemetry.Count(signal, b.Payload))
 		switch o.Kind {
 		case exporter.Success:
 			if e = q.Ack(b.ID); e != nil {
@@ -53,6 +67,7 @@ func deliver(ctx context.Context, signal string, q *spool.Queue, client *exporte
 			rejected := "rejected:" + o.Reason
 			if o.Reason == "permission" {
 				rejected += ":obs." + signal + ".ingest"
+				cooling = clock().Add(refusedCooldown)
 			}
 			if o.Reason == "permission" || o.Reason == "no_bot" {
 				idle = rejected

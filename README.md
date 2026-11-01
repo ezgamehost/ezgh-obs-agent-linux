@@ -169,8 +169,9 @@ Transient network failures and HTTP 429/502/503/504 retry with jitter and
 With `credential: metadata`, a 401 or a metadata outage retains data the same way, and
 sending resumes with the next key. A 403 drops the batch and sets that signal's state to
 `rejected:permission:obs.<signal>.ingest`, so a Bot allowed metrics but not logs sends
-metrics and drops logs, and sending resumes once permission is granted. With no Bot
-attached, batches drop without any network request (`rejected:no_bot`) and checkpoints
+metrics and drops logs. After a 403 that signal drops locally for 10 seconds before
+sending again, so sending resumes within 10 seconds of permission being granted. With no
+Bot attached, batches drop without any network request (`rejected:no_bot`) and checkpoints
 keep advancing, so attaching a Bot leaves no backlog. Partial OTLP success acknowledges the batch and counts rejected items without
 replaying accepted ones. Permanent payload errors are counted and discarded.
 

@@ -210,7 +210,7 @@ allows 5 MiB wire / 64 MiB decoded requests and 64 KiB log bodies.
 | OTLP partial success | Acknowledge batch, count rejected items, surface bounded diagnostic; do not replay accepted items |
 | Network error, HTTP 429/502/503/504 | Retry with exponential backoff and full jitter, 1 second to 60 seconds; honor longer valid Retry-After |
 | HTTP 401 | Retain queue, pause exports until a new credential; expose authentication failure |
-| HTTP 403 | With `credential_file`, as 401. In metadata mode, drop the batch, count it as rejected and name the missing action in the signal's state |
+| HTTP 403 | With `credential_file`, as 401. In metadata mode, drop the batch, count it as rejected, name the missing action in the signal's state, and drop that signal's batches unsent for 10 seconds |
 | No Bot (metadata service's `no_bot`) | Drop every batch without touching the network; checkpoints keep advancing |
 | No key (none yet, or expired during a metadata outage) | Retain queue, pause exports until a key arrives |
 | HTTP 404 or unsupported protocol | Retain queue, pause exports until configuration correction |
@@ -240,7 +240,11 @@ startup error.
 A Bot that can't send is a permission fact, not an outage. Its data is dropped rather
 than spooled: spooling would hold the customer's disk, then bill them for a backlog the
 moment permission arrives. So a 403 and the `no_bot` answer drop, and they are the only
-authentication outcomes that do. A 401 can be a key rotating with a batch in flight, and
+authentication outcomes that do. Each 403 also starts a 10-second cooldown for that signal
+alone, in which its batches are acked and counted as rejected without being sent, so a
+chatty host with a Bot that can't send doesn't ask org-api about every batch. The next
+batch after it goes out normally, so sending resumes within 10 seconds of a grant. A 429
+stays a retry. A 401 can be a key rotating with a batch in flight, and
 a metadata outage says nothing about the Bot, so both keep the batch.
 
 The agent never exits over an unanswered metadata service, since a boot can beat it. The

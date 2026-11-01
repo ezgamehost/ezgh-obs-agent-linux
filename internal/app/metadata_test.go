@@ -426,6 +426,98 @@ func TestOneSignalRefusedOtherFlows(t *testing.T) {
 	}
 }
 
+// A refused signal asks ingest, and so org-api, at most once per cooldown, and the other signal
+// doesn't wait for it.
+func TestRefusedSignalCoolsDown(t *testing.T) {
+	if refusedCooldown != 10*time.Second {
+		t.Fatalf("cooldown %s", refusedCooldown)
+	}
+	var now atomic.Int64
+	now.Store(time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC).UnixNano())
+	clock = func() time.Time { return time.Unix(0, now.Load()) }
+	t.Cleanup(func() { clock = time.Now })
+	var logRequests, metricRequests atomic.Int32
+	var logStatus atomic.Int32
+	logStatus.Store(http.StatusForbidden)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/logs" {
+			logRequests.Add(1)
+			w.WriteHeader(int(logStatus.Load()))
+			return
+		}
+		metricRequests.Add(1)
+	}))
+	defer server.Close()
+	d := t.TempDir()
+	logs, metric := logBatch(t), metricBatch(t)
+	lq := queue(t, "logs", d, logs, logs, logs)
+	mq := queue(t, "metrics", d, metric)
+	client := exporter.NewWithClient(server.URL, server.Client(), "ezgh_key")
+	client.DropForbidden = true
+	state := diagnostics.New()
+	var generation atomic.Uint64
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	for signal, q := range map[string]*spool.Queue{"logs": lq, "metrics": mq} {
+		wg.Go(func() { deliver(ctx, signal, q, client, state, &generation) })
+	}
+	defer func() { cancel(); wg.Wait() }()
+	rejected := func(n uint64) func() bool {
+		return func() bool { return state.Snapshot().Counters["logs_rejected"] == n }
+	}
+	push := func(q *spool.Queue, b []byte) {
+		t.Helper()
+		if err := q.Enqueue([][]byte{b}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Three batches, one request. The rest are acked and counted without being sent.
+	eventually(t, "the first three dropped", rejected(3))
+	if n := logRequests.Load(); n != 1 {
+		t.Fatalf("%d log requests", n)
+	}
+	const refused = "rejected:permission:obs.logs.ingest"
+	eventually(t, "the refusal state", func() bool { return state.Snapshot().States["logs"] == refused })
+
+	// Still cooling down at the last instant, and metrics flow meanwhile.
+	now.Add(int64(refusedCooldown - time.Nanosecond))
+	push(lq, logs)
+	eventually(t, "the local drop", rejected(4))
+	push(mq, metric)
+	eventually(t, "metrics during the cooldown", func() bool { return metricRequests.Load() == 2 })
+	if n := logRequests.Load(); n != 1 {
+		t.Fatalf("%d log requests inside the window", n)
+	}
+	if got := state.Snapshot(); got.States["logs"] != refused || got.Counters["metrics_rejected"] != 0 {
+		t.Fatalf("%+v", got)
+	}
+
+	// The window over, the next batch is sent, and another 403 starts another window.
+	now.Add(int64(time.Nanosecond))
+	push(lq, logs)
+	eventually(t, "the next send", func() bool { return logRequests.Load() == 2 })
+	eventually(t, "the refusal", rejected(5))
+	push(lq, logs)
+	eventually(t, "the local drop", rejected(6))
+	if n := logRequests.Load(); n != 2 {
+		t.Fatalf("%d log requests", n)
+	}
+
+	// Permission granted: a 200 after the window, then every batch goes out.
+	logStatus.Store(http.StatusOK)
+	now.Add(int64(refusedCooldown))
+	push(lq, logs)
+	eventually(t, "the first batch after the grant", func() bool { return logRequests.Load() == 3 })
+	eventually(t, "its acknowledgement", func() bool { return state.Snapshot().Counters["logs_exported"] == 1 })
+	push(lq, logs)
+	eventually(t, "the next batch sent at once", func() bool { return logRequests.Load() == 4 })
+	eventually(t, "the state clearing", func() bool { return state.Snapshot().States["logs"] != refused })
+	if n := state.Snapshot().Counters["logs_rejected"]; n != 6 {
+		t.Fatalf("%d rejected after the grant", n)
+	}
+}
+
 func logBatch(t *testing.T) []byte {
 	t.Helper()
 	p, err := telemetry.EncodeLogs([]*telemetry.LogItem{{Resource: telemetry.Resource("h", "h", "e", "s"), Record: telemetry.Log("line", time.Now(), 0, nil)}}, telemetry.MaxBatch)
