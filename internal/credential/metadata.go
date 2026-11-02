@@ -21,6 +21,8 @@ import (
 
 const (
 	defaultMetadataEndpoint = "http://169.254.169.254"
+	// An IPv6-only guest has no route to the IPv4 address.
+	defaultMetadataFallback = "http://[fd65:7a67:6800::254]"
 	defaultProductNamePath  = "/sys/class/dmi/id/product_name"
 	instanceProductName     = "EZGH Compute"
 	instanceRefreshMargin   = 5 * time.Minute
@@ -50,6 +52,7 @@ var ErrNoProject = errors.New("the instance metadata gives no prj_ project ID")
 // ezgh-fleets-agent's internal/creds.
 type Metadata struct {
 	Endpoint        string // default http://169.254.169.254
+	Fallback        string // tried when Endpoint is unreachable; default http://[fd65:7a67:6800::254]
 	ProductNamePath string // default /sys/class/dmi/id/product_name
 	HTTP            *http.Client
 	Now             func() time.Time
@@ -216,10 +219,18 @@ var metadataClient = &http.Client{Timeout: 10 * time.Second, Transport: &http.Tr
 }}
 
 func (p *Metadata) do(ctx context.Context, method, path string, h http.Header) (int, []byte, error) {
-	endpoint := p.Endpoint
+	endpoint, fallback := p.Endpoint, p.Fallback
 	if endpoint == "" {
-		endpoint = defaultMetadataEndpoint
+		endpoint, fallback = defaultMetadataEndpoint, defaultMetadataFallback
 	}
+	status, body, err := p.call(ctx, endpoint, method, path, h)
+	if err != nil && fallback != "" {
+		return p.call(ctx, fallback, method, path, h)
+	}
+	return status, body, err
+}
+
+func (p *Metadata) call(ctx context.Context, endpoint, method, path string, h http.Header) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, endpoint+path, nil)
 	if err != nil {
 		return 0, nil, err

@@ -15,13 +15,13 @@ the Kubernetes `ezgh-obs-agent` chart. There is no remote control or self-update
 ## Install
 
 Download the package matching your architecture from the
-[v0.2.0 preview release](https://github.com/ezgamehost/ezgh-obs-agent-linux/releases/tag/v0.2.0).
+[v0.2.1 preview release](https://github.com/ezgamehost/ezgh-obs-agent-linux/releases/tag/v0.2.1).
 Verify its SHA-256 against the accompanying `SHA256SUMS` before installing:
 
 ```sh
-sudo dpkg -i ezgh-obs-agent-linux_0.2.0_amd64.deb
+sudo dpkg -i ezgh-obs-agent-linux_0.2.1_amd64.deb
 # Or, on an RPM system:
-sudo rpm -Uvh ezgh-obs-agent-linux-0.2.0-1.x86_64.rpm
+sudo rpm -Uvh ezgh-obs-agent-linux-0.2.1-1.x86_64.rpm
 ```
 
 The service runs as `ezgh-obs-agent`. Packages grant membership in `systemd-journal`
@@ -104,8 +104,8 @@ ConditionPathExists=
 ```
 
 Keys are short-lived and replaced in the background; SIGHUP does nothing in this mode.
-An instance needs a route to the ingest endpoint. Instances with only IPv6, and private
-instances with no gateway, stay idle or retry within their queue limits.
+An instance needs a route to the ingest endpoint, over IPv4 or IPv6. Private instances with
+no gateway retry within their queue limits.
 
 Switching an installation from `credential_file` to `credential: metadata` starts empty
 queues under `<state_dir>/<ins_id>/`. The agent doesn't read or remove the old `logs.db`
@@ -217,7 +217,7 @@ pkg-config and CA certificates. On Debian/Ubuntu:
 sudo apt-get install build-essential libsystemd-dev pkg-config
 scripts/test.sh
 # Also requires python3, rpm and dpkg-deb:
-scripts/build.sh 0.2.0
+scripts/build.sh 0.2.1
 ```
 
 `dist/` receives tar/deb/rpm artifacts, CycloneDX module inventories and checksums.
