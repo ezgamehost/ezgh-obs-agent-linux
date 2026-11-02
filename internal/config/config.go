@@ -57,6 +57,11 @@ type Config struct {
 		MaxBytes   int      `yaml:"max_bytes"`
 		// Scrape is Prometheus endpoints on this host, read with every collection.
 		Scrape []Scrape `yaml:"scrape"`
+		// PointAttributes are the resource attributes file's keys that also go on every point, which
+		// is what makes them series labels. A key whose value changes often churns series: leave it out.
+		PointAttributes []string `yaml:"point_attributes"`
+		// TextfileDirectory is read by node_exporter's textfile collector: *.prom files on this host.
+		TextfileDirectory string `yaml:"textfile_directory"`
 	} `yaml:"metrics"`
 	Logs struct {
 		Journal struct {
@@ -147,6 +152,14 @@ func Parse(r io.Reader) (Config, error) {
 	}
 	if c.Metrics.MaxPoints < 1 || c.Metrics.MaxPoints > 1000000 || c.Metrics.MaxBytes < 1<<20 || c.Metrics.MaxBytes > 64<<20 {
 		return c, errors.New("metric limits out of range")
+	}
+	if c.Metrics.TextfileDirectory != "" && !filepath.IsAbs(c.Metrics.TextfileDirectory) {
+		return c, errors.New("textfile_directory must be an absolute path")
+	}
+	for _, k := range c.Metrics.PointAttributes {
+		if k == "" || len(k) > 128 {
+			return c, errors.New("a point attribute must be 1-128 characters")
+		}
 	}
 	if c.ResourceAttributesFile != "" && !filepath.IsAbs(c.ResourceAttributesFile) {
 		return c, errors.New("resource_attributes_file must be an absolute path")

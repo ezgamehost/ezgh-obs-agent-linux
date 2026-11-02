@@ -20,7 +20,7 @@ import (
 )
 
 func collectMetrics(ctx context.Context, c config.Config, id, host string, q *spool.Queue, s *diagnostics.State) error {
-	collector, e := node.New(c.Metrics.Collectors)
+	collector, e := node.New(c.Metrics.Collectors, c.Metrics.TextfileDirectory)
 	if e != nil {
 		return e
 	}

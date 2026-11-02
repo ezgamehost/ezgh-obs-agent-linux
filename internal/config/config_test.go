@@ -125,3 +125,18 @@ func TestScrapeAndAttributes(t *testing.T) {
 		}
 	}
 }
+
+func TestPointAttributesAndTextfiles(t *testing.T) {
+	c, err := Parse(strings.NewReader(base + "metrics:\n  point_attributes: [lbr, ins]\n  textfile_directory: /run/lbagent/metrics\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Metrics.PointAttributes) != 2 || c.Metrics.TextfileDirectory != "/run/lbagent/metrics" {
+		t.Errorf("%+v", c.Metrics)
+	}
+	for _, suffix := range []string{"metrics:\n  textfile_directory: relative\n", "metrics:\n  point_attributes: [\"\"]\n"} {
+		if _, err := Parse(strings.NewReader(base + suffix)); err == nil {
+			t.Errorf("accepted %q", suffix)
+		}
+	}
+}

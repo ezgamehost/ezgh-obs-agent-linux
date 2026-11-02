@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -186,6 +187,15 @@ func EncodeLogs(rows []*LogItem, limit int) ([][]byte, error) {
 	return out, nil
 }
 
+// UsePointAttributes says which of the attributes file's keys go on every metric point too.
+func UsePointAttributes(keys []string) { pointKeys.Store(&pointList{slices.Clone(keys)}) }
+
+type pointList struct{ keys []string }
+
+var pointKeys atomic.Pointer[pointList]
+
+func init() { pointKeys.Store(&pointList{}) }
+
 // pointReserved are labels Obs sets itself: a file never names them on a point.
 var pointReserved = regexp.MustCompile(`^(job|instance|environment|application|le|quantile|__.*__)$`)
 
@@ -197,7 +207,9 @@ var nonLabel = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 func EncodeMetrics(families []*dto.MetricFamily, res *resource.Resource, at time.Time, maxPoints, maxBytes int) ([][]byte, error) {
 	var points []*metrics.Metric
 	// PromQL makes labels from point attributes, never the resource, so the file's go on each point.
-	extra := slices.DeleteFunc(slices.Clone(extraAttributes()), func(kv *common.KeyValue) bool { return pointReserved.MatchString(labelKey(kv.Key)) })
+	extra := slices.DeleteFunc(slices.Clone(extraAttributes()), func(kv *common.KeyValue) bool {
+		return !slices.Contains(pointKeys.Load().keys, kv.Key) || pointReserved.MatchString(labelKey(kv.Key))
+	})
 	for _, f := range families {
 		for _, m := range f.Metric {
 			t := uint64(at.UnixNano())

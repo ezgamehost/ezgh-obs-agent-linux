@@ -9,7 +9,9 @@ import (
 
 type Collector struct{}
 
-func New([]string) (*Collector, error) { return nil, errors.New("host collection requires Linux") }
+func New([]string, string) (*Collector, error) {
+	return nil, errors.New("host collection requires Linux")
+}
 func (*Collector) Gather() ([]*dto.MetricFamily, error) {
 	return nil, errors.New("host collection requires Linux")
 }

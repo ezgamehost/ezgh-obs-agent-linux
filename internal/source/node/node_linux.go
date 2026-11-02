@@ -11,6 +11,7 @@ import (
 	"github.com/prometheus/node_exporter/collector"
 	"io"
 	"log/slog"
+	"slices"
 	"sync"
 )
 
@@ -19,7 +20,8 @@ var initialized bool
 
 type Collector struct{ registry *prometheus.Registry }
 
-func New(names []string) (*Collector, error) {
+// New runs the named collectors, and node_exporter's textfile collector on textfiles if it's set.
+func New(names []string, textfiles string) (*Collector, error) {
 	initMu.Lock()
 	defer initMu.Unlock()
 	if initialized {
@@ -28,6 +30,10 @@ func New(names []string) (*Collector, error) {
 	args := make([]string, 0, len(names))
 	for _, n := range names {
 		args = append(args, "--collector."+n)
+	}
+	if textfiles != "" {
+		names = append(slices.Clone(names), "textfile")
+		args = append(args, "--collector.textfile", "--collector.textfile.directory="+textfiles)
 	}
 	if _, e := kingpin.CommandLine.Parse(args); e != nil {
 		return nil, e
