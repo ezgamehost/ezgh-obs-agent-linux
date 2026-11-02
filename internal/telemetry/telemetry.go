@@ -207,8 +207,9 @@ var nonLabel = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 func EncodeMetrics(families []*dto.MetricFamily, res *resource.Resource, at time.Time, maxPoints, maxBytes int) ([][]byte, error) {
 	var points []*metrics.Metric
 	// PromQL makes labels from point attributes, never the resource, so the file's go on each point.
+	keys := pointKeys.Load().keys
 	extra := slices.DeleteFunc(slices.Clone(extraAttributes()), func(kv *common.KeyValue) bool {
-		return !slices.Contains(pointKeys.Load().keys, kv.Key) || pointReserved.MatchString(labelKey(kv.Key))
+		return !slices.Contains(keys, kv.Key) || pointReserved.MatchString(labelKey(kv.Key))
 	})
 	for _, f := range families {
 		for _, m := range f.Metric {

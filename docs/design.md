@@ -99,7 +99,8 @@ collections. Start with the pinned upstream collectors `cpu`, `meminfo`,
 `loadavg`, `diskstats`, `filesystem`, `netdev`, `netstat`, `stat`, `time`, `uname`,
 `vmstat` and `os`. Preserve their emitted `node_*` names, HELP text and labels.
 Reuse upstream filesystem/device exclusion defaults. Additional collectors,
-including systemd unit metrics and textfile metrics, are outside the v1 allowlist.
+such as systemd unit metrics, are outside the v1 allowlist. The textfile collector is the one
+exception, and only when `metrics.textfile_directory` names a directory (since v0.3.3).
 Unknown collector names are configuration errors.
 
 Use a private registry. Gather metric families directly, without an HTTP listener

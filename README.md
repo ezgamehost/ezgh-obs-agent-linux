@@ -15,13 +15,13 @@ the Kubernetes `ezgh-obs-agent` chart. There is no remote control or self-update
 ## Install
 
 Download the package matching your architecture from the
-[v0.3.2 preview release](https://github.com/ezgamehost/ezgh-obs-agent-linux/releases/tag/v0.3.2).
+[v0.3.3 preview release](https://github.com/ezgamehost/ezgh-obs-agent-linux/releases/tag/v0.3.3).
 Verify its SHA-256 against the accompanying `SHA256SUMS` before installing:
 
 ```sh
-sudo dpkg -i ezgh-obs-agent-linux_0.3.2_amd64.deb
+sudo dpkg -i ezgh-obs-agent-linux_0.3.3_amd64.deb
 # Or, on an RPM system:
-sudo rpm -Uvh ezgh-obs-agent-linux-0.3.2-1.x86_64.rpm
+sudo rpm -Uvh ezgh-obs-agent-linux-0.3.3-1.x86_64.rpm
 ```
 
 The service runs as `ezgh-obs-agent`. Packages grant membership in `systemd-journal`
@@ -115,9 +115,22 @@ by hand.
 ## Extra attributes and local metrics
 
 `resource_attributes_file` names a JSON object of string attributes, such as
-`{"role":"active"}`, added to every log line and metric. Another process may rewrite it at any
-time, and a file that doesn't parse keeps the last good set. It can't change the agent's own
-attributes (`host.id`, `service.name` and the rest).
+`{"lbr":"lbr_a","role":"active"}`, added to every log line's resource. Another process may
+rewrite it at any time, and a file that doesn't parse keeps the last good set. It can't change
+the agent's own attributes (`host.id`, `service.name` and the rest).
+
+Obs makes series labels from a point's attributes, not its resource, so
+`metrics.point_attributes` lists the file's keys that also go on every metric point (none by
+default; v0.3.2 put them all there). Leave out a key whose value changes often, or every change
+makes every series new. Publish such values as one info series in a textfile instead:
+`metrics.textfile_directory` turns on node_exporter's textfile collector for `*.prom` files in
+that directory. A malformed file is dropped and counted in `node_textfile_scrape_error`.
+
+```yaml
+metrics:
+  point_attributes: [lbr, ins]
+  textfile_directory: /run/myapp/metrics
+```
 
 `metrics.scrape` lists Prometheus endpoints on the loopback address, read with every collection
 and sent under their `service`:
@@ -235,7 +248,7 @@ pkg-config and CA certificates. On Debian/Ubuntu:
 sudo apt-get install build-essential libsystemd-dev pkg-config
 scripts/test.sh
 # Also requires python3, rpm and dpkg-deb:
-scripts/build.sh 0.3.2
+scripts/build.sh 0.3.3
 ```
 
 `dist/` receives tar/deb/rpm artifacts, CycloneDX module inventories and checksums.
