@@ -15,13 +15,13 @@ the Kubernetes `ezgh-obs-agent` chart. There is no remote control or self-update
 ## Install
 
 Download the package matching your architecture from the
-[v0.1.0 preview release](https://github.com/ezgamehost/ezgh-obs-agent-linux/releases/tag/v0.1.0).
+[v0.2.0 preview release](https://github.com/ezgamehost/ezgh-obs-agent-linux/releases/tag/v0.2.0).
 Verify its SHA-256 against the accompanying `SHA256SUMS` before installing:
 
 ```sh
-sudo dpkg -i ezgh-obs-agent-linux_0.1.0_amd64.deb
+sudo dpkg -i ezgh-obs-agent-linux_0.2.0_amd64.deb
 # Or, on an RPM system:
-sudo rpm -Uvh ezgh-obs-agent-linux-0.1.0-1.x86_64.rpm
+sudo rpm -Uvh ezgh-obs-agent-linux-0.2.0-1.x86_64.rpm
 ```
 
 The service runs as `ezgh-obs-agent`. Packages grant membership in `systemd-journal`
@@ -66,11 +66,12 @@ The service's own diagnostics go to journald and are excluded from forwarding by
 
 ### Using an API key
 
-Any `ezgh_` API key can replace the ingest key. Put it in the same restricted file and
-name the project, which an API key doesn't select by itself:
+Any `ezgh_` API key can replace the ingest key. Put it in the same restricted file, the
+one the packaged unit requires, and name the project, which an API key doesn't select by
+itself:
 
 ```yaml
-credential_file: /etc/ezgh-obs-agent-linux/api-key
+credential_file: /etc/ezgh-obs-agent-linux/ingest-key
 project: prj_g7h8i9j0k1l2
 ```
 
@@ -105,6 +106,11 @@ ConditionPathExists=
 Keys are short-lived and replaced in the background; SIGHUP does nothing in this mode.
 An instance needs a route to the ingest endpoint. Instances with only IPv6, and private
 instances with no gateway, stay idle or retry within their queue limits.
+
+Switching an installation from `credential_file` to `credential: metadata` starts empty
+queues under `<state_dir>/<ins_id>/`. The agent doesn't read or remove the old `logs.db`
+and `metrics.db` at the top of `state_dir`, so drain them first; once unneeded, delete them
+by hand.
 
 ## Collection and identity
 
@@ -166,8 +172,9 @@ outage buffer or exactly-once guarantee.
 
 Transient network failures and HTTP 429/502/503/504 retry with jitter and
 `Retry-After`. Authentication failures retain data and pause until credential reload.
-With `credential: metadata`, a 401 or a metadata outage retains data the same way, and
-sending resumes with the next key. A 403 drops the batch and sets that signal's state to
+With `credential: metadata`, a 401 or a metadata outage retains data the same way and
+sending resumes with the next key, which a 401 fetches at once.
+A 404 or redirect retries with backoff here rather than pausing. A 403 drops the batch and sets that signal's state to
 `rejected:permission:obs.<signal>.ingest`, so a Bot allowed metrics but not logs sends
 metrics and drops logs. After a 403 that signal drops locally for 10 seconds before
 sending again, so sending resumes within 10 seconds of permission being granted. With no
@@ -190,7 +197,8 @@ the old queue or choosing a new state directory.
 
 Preserve `/var/lib/ezgh-obs-agent-linux` through upgrades. Do not bake its contents
 into VM images: each clone needs a new ID and empty state. With `credential: metadata`
-queues live in `<state_dir>/<ins_id>/`, so a clone of an instance's disk starts clean. Corrupt/unknown-format
+queues live in `<state_dir>/<ins_id>/`, so a clone of an instance's disk starts clean, and
+it deletes any other instance's directory there. Corrupt/unknown-format
 queues are never silently deleted. Package removal preserves state and the credential;
 retiring an installation requires explicit cleanup. Configured `host_id` overrides
 the generated ID and must be unique per host.
@@ -209,7 +217,7 @@ pkg-config and CA certificates. On Debian/Ubuntu:
 sudo apt-get install build-essential libsystemd-dev pkg-config
 scripts/test.sh
 # Also requires python3, rpm and dpkg-deb:
-scripts/build.sh 0.1.0
+scripts/build.sh 0.2.0
 ```
 
 `dist/` receives tar/deb/rpm artifacts, CycloneDX module inventories and checksums.
