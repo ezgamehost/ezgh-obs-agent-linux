@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-version=${1:-0.3.1}
+version=${1:-0.3.2}
 case "$version" in *[!0-9A-Za-z.+-]*|'') echo 'invalid version' >&2; exit 1;; esac
 [ "$(go env GOOS)" = linux ] || { echo 'Build on Linux with libsystemd-dev installed' >&2; exit 1; }
 arch=$(go env GOARCH)

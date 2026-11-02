@@ -15,13 +15,13 @@ the Kubernetes `ezgh-obs-agent` chart. There is no remote control or self-update
 ## Install
 
 Download the package matching your architecture from the
-[v0.3.1 preview release](https://github.com/ezgamehost/ezgh-obs-agent-linux/releases/tag/v0.3.1).
+[v0.3.2 preview release](https://github.com/ezgamehost/ezgh-obs-agent-linux/releases/tag/v0.3.2).
 Verify its SHA-256 against the accompanying `SHA256SUMS` before installing:
 
 ```sh
-sudo dpkg -i ezgh-obs-agent-linux_0.3.1_amd64.deb
+sudo dpkg -i ezgh-obs-agent-linux_0.3.2_amd64.deb
 # Or, on an RPM system:
-sudo rpm -Uvh ezgh-obs-agent-linux-0.3.1-1.x86_64.rpm
+sudo rpm -Uvh ezgh-obs-agent-linux-0.3.2-1.x86_64.rpm
 ```
 
 The service runs as `ezgh-obs-agent`. Packages grant membership in `systemd-journal`
@@ -235,7 +235,7 @@ pkg-config and CA certificates. On Debian/Ubuntu:
 sudo apt-get install build-essential libsystemd-dev pkg-config
 scripts/test.sh
 # Also requires python3, rpm and dpkg-deb:
-scripts/build.sh 0.3.1
+scripts/build.sh 0.3.2
 ```
 
 `dist/` receives tar/deb/rpm artifacts, CycloneDX module inventories and checksums.
