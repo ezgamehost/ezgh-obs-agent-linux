@@ -4,7 +4,6 @@ package telemetry
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	dto "github.com/prometheus/client_model/go"
 	logservice "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	metricservice "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -13,6 +12,7 @@ import (
 	metrics "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resource "go.opentelemetry.io/proto/otlp/resource/v1"
 	"google.golang.org/protobuf/proto"
+	"io"
 	"os"
 	"sort"
 	"strings"
