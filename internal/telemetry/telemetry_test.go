@@ -62,6 +62,32 @@ func TestCounterConversion(t *testing.T) {
 	}
 }
 
+// PromQL makes series labels from point attributes, not the resource, so the file's labels go on
+// every point; a point's own label of the same name wins.
+func TestPointsCarryTheAttributesFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "attributes.json")
+	if e := os.WriteFile(path, []byte(`{"lbr":"lbr_a","role":"active","proxy":"forged"}`), 0o644); e != nil {
+		t.Fatal(e)
+	}
+	UseAttributesFile(path)
+	defer UseAttributesFile("")
+	f := &dto.MetricFamily{Name: proto.String("haproxy_up"), Type: dto.MetricType_GAUGE.Enum(), Metric: []*dto.Metric{{
+		Label: []*dto.LabelPair{{Name: proto.String("proxy"), Value: proto.String("lsn_a")}}, Gauge: &dto.Gauge{Value: proto.Float64(1)}}}}
+	b, e := EncodeMetrics([]*dto.MetricFamily{f}, Resource("id", "host", "prod", "haproxy"), time.Unix(10, 0), 100, 1<<20)
+	if e != nil {
+		t.Fatal(e)
+	}
+	v := new(metrics.ExportMetricsServiceRequest)
+	proto.Unmarshal(b[0], v)
+	got := map[string]string{}
+	for _, a := range v.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetGauge().DataPoints[0].Attributes {
+		got[a.Key] = a.Value.GetStringValue()
+	}
+	if got["lbr"] != "lbr_a" || got["role"] != "active" || got["proxy"] != "lsn_a" || len(got) != 3 {
+		t.Errorf("%v", got)
+	}
+}
+
 func TestMetricSplitShrinksGroupedRequest(t *testing.T) {
 	r := metricRequest(Resource("id", "host", "prod", "svc"), nil)
 	for range 5000 {

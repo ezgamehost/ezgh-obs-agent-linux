@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -185,6 +186,8 @@ func EncodeLogs(rows []*LogItem, limit int) ([][]byte, error) {
 }
 func EncodeMetrics(families []*dto.MetricFamily, res *resource.Resource, at time.Time, maxPoints, maxBytes int) ([][]byte, error) {
 	var points []*metrics.Metric
+	// PromQL makes labels from point attributes, never the resource, so the file's go on each point.
+	extra := extraAttributes()
 	for _, f := range families {
 		for _, m := range f.Metric {
 			t := uint64(at.UnixNano())
@@ -194,6 +197,11 @@ func EncodeMetrics(families []*dto.MetricFamily, res *resource.Resource, at time
 			p := &metrics.NumberDataPoint{TimeUnixNano: t}
 			for _, a := range m.Label {
 				p.Attributes = append(p.Attributes, Attribute(a.GetName(), a.GetValue()))
+			}
+			for _, kv := range extra {
+				if !slices.ContainsFunc(m.Label, func(l *dto.LabelPair) bool { return l.GetName() == kv.Key }) {
+					p.Attributes = append(p.Attributes, kv)
+				}
 			}
 			v := &metrics.Metric{Name: f.GetName(), Description: f.GetHelp()}
 			switch f.GetType() {
