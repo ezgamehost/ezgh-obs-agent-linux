@@ -64,32 +64,33 @@ func collectMetrics(ctx context.Context, c config.Config, id, host string, q *sp
 					s.Add("metrics_unsupported_families", 1)
 				}
 			}
-			payloads, e := telemetry.EncodeMetrics(r.f, telemetry.Resource(id, host, c.Environment, "node-exporter"), r.at, c.Metrics.MaxPoints, c.Metrics.MaxBytes)
-			if e != nil {
-				s.Add("metrics_rejected_scrapes", 1)
-				continue
-			}
-			if e = q.Enqueue(payloads, nil); errors.Is(e, spool.ErrFull) {
-				s.Add("metrics_skipped_scrapes", 1)
-			} else if e != nil {
-				return e
-			} else {
+			send := func(families []*dto.MetricFamily, service string) error {
+				payloads, e := telemetry.EncodeMetrics(families, telemetry.Resource(id, host, c.Environment, service), r.at, c.Metrics.MaxPoints, c.Metrics.MaxBytes)
+				if e != nil {
+					s.Add("metrics_rejected_scrapes", 1)
+					return nil
+				}
+				if e = q.Enqueue(payloads, nil); errors.Is(e, spool.ErrFull) {
+					s.Add("metrics_skipped_scrapes", 1)
+					return nil
+				} else if e != nil {
+					return e
+				}
 				for _, p := range payloads {
 					s.Add("metrics_collected", uint64(telemetry.Count("metrics", p)))
 				}
 				s.Set("metrics_collection", "ready")
+				return nil
 			}
-			for _, sc := range r.scraped {
+			if e := send(r.f, "node-exporter"); e != nil {
+				return e
+			}
+			for _, sc := range r.scraped { // one source failing doesn't cost the others
 				if sc.err != nil {
 					s.Add("metrics_scrape_errors", 1)
 					continue
 				}
-				payloads, e := telemetry.EncodeMetrics(sc.families, telemetry.Resource(id, host, c.Environment, sc.service), r.at, c.Metrics.MaxPoints, c.Metrics.MaxBytes)
-				if e != nil {
-					s.Add("metrics_rejected_scrapes", 1)
-					continue
-				}
-				if e = q.Enqueue(payloads, nil); e != nil && !errors.Is(e, spool.ErrFull) {
+				if e := send(sc.families, sc.service); e != nil {
 					return e
 				}
 			}

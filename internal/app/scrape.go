@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -47,8 +48,17 @@ func scrape(ctx context.Context, url string, maxBytes int) ([]*dto.MetricFamily,
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("scrape: %s", resp.Status)
 	}
+	// Read one byte past the limit: cut at a line's end, a truncated body still parses, as a scrape
+	// that quietly lost its last families.
+	body, e := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
+	if e != nil {
+		return nil, e
+	}
+	if len(body) > maxBytes {
+		return nil, fmt.Errorf("scrape: more than %d bytes", maxBytes)
+	}
 	parser := expfmt.NewTextParser(model.UTF8Validation)
-	families, e := parser.TextToMetricFamilies(io.LimitReader(resp.Body, int64(maxBytes)))
+	families, e := parser.TextToMetricFamilies(bytes.NewReader(body))
 	if e != nil {
 		return nil, e
 	}

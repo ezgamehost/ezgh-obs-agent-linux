@@ -45,3 +45,11 @@ func TestScrapeRefusesGarbage(t *testing.T) {
 		t.Error("parsed it")
 	}
 }
+
+func TestScrapeOverTheLimitFails(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(haproxyMetrics)) }))
+	defer s.Close()
+	if _, e := scrape(context.Background(), s.URL, 100); e == nil {
+		t.Error("a truncated scrape passed")
+	}
+}
