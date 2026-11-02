@@ -384,6 +384,8 @@ func TestRestartDuringCredentialsOutageSpools(t *testing.T) {
 	eventually(t, "the first delivery", func() bool { return in.requests() == 1 })
 	stop()
 
+	// A poll slower than the file source, so a wrong start can't be corrected before it drops.
+	keyPoll = 2 * time.Second
 	in.credsDown.Store(true)
 	in.logLine("during the outage")
 	in.run()
