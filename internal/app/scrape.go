@@ -18,7 +18,8 @@ import (
 const scrapeTimeout = 5 * time.Second
 
 // scrapeClient goes nowhere but the loopback address, so proxies in the environment don't apply.
-var scrapeClient = &http.Client{Timeout: scrapeTimeout, Transport: &http.Transport{DisableKeepAlives: true}}
+var scrapeClient = &http.Client{Timeout: scrapeTimeout, Transport: &http.Transport{DisableKeepAlives: true},
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }} // a redirect could leave loopback
 
 type scraped struct {
 	service  string

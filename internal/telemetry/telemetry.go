@@ -4,6 +4,7 @@ package telemetry
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	dto "github.com/prometheus/client_model/go"
 	logservice "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	metricservice "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -16,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -42,6 +44,8 @@ func UseAttributesFile(path string) {
 	extra.path, extra.next, extra.kv = path, time.Time{}, nil
 }
 
+const maxAttributes = 1 << 16
+
 // reserved are the attributes that say what the data is. A file doesn't get to change those.
 var reserved = map[string]bool{"host.id": true, "host.name": true, "os.type": true, "service.name": true, "service.instance.id": true, "ezgh.metadata.application": true, "ezgh.metadata.environment": true}
 
@@ -53,9 +57,9 @@ func extraAttributes() []*common.KeyValue {
 	}
 	if now := time.Now(); now.After(extra.next) {
 		extra.next = now.Add(time.Second)
-		if b, e := os.ReadFile(extra.path); e == nil && len(b) <= 1<<16 {
+		if b, ok := readAttributes(extra.path); ok {
 			var m map[string]string
-			if json.Unmarshal(b, &m) == nil {
+			if json.Unmarshal(b, &m) == nil && m != nil { // a null keeps the last good set too
 				keys := make([]string, 0, len(m))
 				for k := range m {
 					if !reserved[k] {
@@ -65,13 +69,29 @@ func extraAttributes() []*common.KeyValue {
 				sort.Strings(keys)
 				kv := make([]*common.KeyValue, 0, len(keys))
 				for _, k := range keys {
-					kv = append(kv, Attribute(k, m[k]))
+					v, _ := Bounded(m[k], 4096)
+					kv = append(kv, Attribute(k, v))
 				}
 				extra.kv = kv
 			}
 		}
 	}
 	return extra.kv
+}
+
+// readAttributes reads the file with the lock held on every signal's path, so a FIFO or a huge file
+// at that path can't hold them up.
+func readAttributes(path string) ([]byte, bool) {
+	f, e := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if e != nil {
+		return nil, false
+	}
+	defer f.Close()
+	if st, e := f.Stat(); e != nil || !st.Mode().IsRegular() || st.Size() > maxAttributes {
+		return nil, false
+	}
+	b, e := io.ReadAll(io.LimitReader(f, maxAttributes+1))
+	return b, e == nil && len(b) <= maxAttributes
 }
 
 func Resource(id, hostname, environment, service string) *resource.Resource {

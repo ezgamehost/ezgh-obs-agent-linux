@@ -26,6 +26,16 @@ func TestScrape(t *testing.T) {
 	}
 }
 
+func TestScrapeFollowsNoRedirect(t *testing.T) {
+	away := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(haproxyMetrics)) }))
+	defer away.Close()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, away.URL, http.StatusFound) }))
+	defer s.Close()
+	if _, e := scrape(context.Background(), s.URL, 1<<20); e == nil {
+		t.Error("a redirect was followed")
+	}
+}
+
 func TestScrapeAllCarriesItsError(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "no", http.StatusServiceUnavailable) }))
 	defer s.Close()

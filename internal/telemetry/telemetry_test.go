@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -103,6 +104,59 @@ func TestUpstreamUntypedPreservesNameAndValue(t *testing.T) {
 	m := r.ResourceMetrics[0].ScopeMetrics[0].Metrics[0]
 	if m.Name != "node_vmstat_pgpgin" || m.GetGauge().DataPoints[0].GetAsDouble() != 123 {
 		t.Fatal(m)
+	}
+}
+
+// What's at the path can't stop the signals that read it, or wipe what it said last.
+func TestAttributesFileHeldToItsShape(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "attributes.json")
+	write := func(body string) {
+		t.Helper()
+		os.Remove(path)
+		if e := os.WriteFile(path, []byte(body), 0o644); e != nil {
+			t.Fatal(e)
+		}
+		extra.Lock()
+		extra.next = time.Time{}
+		extra.Unlock()
+	}
+	get := func() (string, int) {
+		lbr, size := "", 0
+		for _, a := range Resource("i", "h", "e", "s").Attributes {
+			if a.Key == "lbr" {
+				lbr, size = a.Value.GetStringValue(), len(a.Value.GetStringValue())
+			}
+		}
+		return lbr, size
+	}
+	UseAttributesFile(path)
+	defer UseAttributesFile("")
+	write(`{"lbr":"lbr_a"}`)
+	if got, _ := get(); got != "lbr_a" {
+		t.Fatal(got)
+	}
+	write(`null`)
+	if got, _ := get(); got != "lbr_a" {
+		t.Errorf("null wiped the labels: %q", got)
+	}
+	os.Remove(path)
+	if e := syscall.Mkfifo(path, 0o644); e != nil {
+		t.Fatal(e)
+	}
+	extra.Lock()
+	extra.next = time.Time{}
+	extra.Unlock()
+	done := make(chan struct{})
+	go func() { get(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("a FIFO blocked the reader")
+	}
+	write(`{"lbr":"` + strings.Repeat("x", 5000) + `"}`)
+	if _, size := get(); size != 4096 {
+		t.Errorf("a value of %d bytes", size)
 	}
 }
 
