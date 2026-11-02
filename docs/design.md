@@ -213,7 +213,7 @@ allows 5 MiB wire / 64 MiB decoded requests and 64 KiB log bodies.
 | HTTP 403 | With `credential_file`, as 401. In metadata mode, drop the batch, count it as rejected, name the missing action in the signal's state, and drop that signal's batches unsent for 10 seconds |
 | No Bot (metadata service's `no_bot`) | Drop every batch without touching the network; checkpoints keep advancing |
 | No key (none yet, or expired during a metadata outage) | Retain queue, pause exports until a key arrives |
-| HTTP 404 or unsupported protocol | Retain queue, pause exports until configuration correction |
+| HTTP 404 or unsupported protocol | Retain queue, pause exports until configuration correction. In metadata mode nobody can correct it, so retry with backoff, which also lets a detach reach the batch |
 | HTTP 413 | Split batch durably; reject and count an indivisible record if still refused |
 | Other permanent protocol rejection | Count dropped items and acknowledge offending batch; never log body or credentials |
 
@@ -245,7 +245,9 @@ alone, in which its batches are acked and counted as rejected without being sent
 chatty host with a Bot that can't send doesn't ask org-api about every batch. The next
 batch after it goes out normally, so sending resumes within 10 seconds of a grant. A 429
 stays a retry. A 401 can be a key rotating with a batch in flight, and
-a metadata outage says nothing about the Bot, so both keep the batch.
+a metadata outage says nothing about the Bot, so both keep the batch. A 401 also fetches
+a new key at once rather than waiting for the rotation, at most once per 30-second poll,
+so an ingest host that refuses every key can't turn into a loop minting them.
 
 The agent never exits over an unanswered metadata service, since a boot can beat it. The
 lock and status socket sit at the top of `state_dir`, so `doctor` works before the
@@ -253,10 +255,12 @@ instance ID is known. Until the first key the daemon holds nothing else: sources
 queues start with it, so a Bot-less instance writes no data and journal `start_at: end`
 begins at that moment. Queues and checkpoints live in `<state_dir>/<ins_id>/`, so a clone
 of the disk starts clean rather than failing the binding check or sending the original's
-data under a new identity. An instance whose directory already exists has sent before:
-told there's no Bot at start, it runs sources and drops, as on a live detach, because
-stopped sources would leave a checkpoint gap that the next Bot would send and be billed
-for.
+data under a new identity. As soon as the ID is known the agent deletes any other `ins_`
+directory there, the stale clones that can never send. Top-level queues from a
+`credential_file` installation aren't touched. An instance whose directory already exists
+has sent before, so it starts sources with or without a key. Told there's no Bot, it drops,
+as on a live detach, because stopped sources would leave a checkpoint gap that the next Bot
+would send and be billed for. During a credentials outage it pauses and spools.
 
 Each new key takes the reload path (`SetCredential`, then the generation counter), which
 wakes a paused export. Metadata mode has no credential file, so SIGHUP does nothing. A

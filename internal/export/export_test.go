@@ -21,7 +21,11 @@ func TestHTTPOutcomes(t *testing.T) {
 	}{{200, Success}, {429, Retry}, {502, Retry}, {503, Retry}, {504, Retry}, {401, Pause}, {403, Pause}, {404, Pause}, {413, Split}, {400, Drop}, {500, Drop}, {302, Pause}} {
 		for _, dropForbidden := range []bool{false, true} {
 			if tc.status == 403 && dropForbidden {
-				continue // TestMetadata403Drops: the one outcome that differs
+				continue // TestMetadata403Drops
+			}
+			want := tc.want
+			if dropForbidden && (tc.status == 404 || tc.status == 302) {
+				want = Retry // TestMetadataEndpointRefusalRetries
 			}
 			t.Run(http.StatusText(tc.status), func(t *testing.T) {
 				s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +40,7 @@ func TestHTTPOutcomes(t *testing.T) {
 				c := NewWithClient(s.URL, s.Client(), "test")
 				c.DropForbidden = dropForbidden
 				o := c.Send(context.Background(), "logs", []byte{})
-				if o.Kind != tc.want {
+				if o.Kind != want {
 					t.Fatalf("%+v", o)
 				}
 				if tc.status == 429 && o.After != 120*time.Second {
@@ -172,5 +176,42 @@ func TestProjectHeaderSentForAPIKey(t *testing.T) {
 		if v := got.Load().([]string); !slices.Equal(v, want) {
 			t.Fatalf("%.8s: header %v, want %v", key, v, want)
 		}
+	}
+}
+
+// Nobody on an instance can fix an endpoint, so metadata mode keeps trying, and each try reaches
+// the no-Bot check.
+func TestMetadataEndpointRefusalRetries(t *testing.T) {
+	for _, status := range []int{404, 302} {
+		s, hits := server(t, status)
+		c := NewWithClient(s.URL, s.Client(), apiKey)
+		c.DropForbidden = true
+		if o := c.Send(context.Background(), "logs", nil); o.Kind != Retry || o.Reason != "endpoint" {
+			t.Fatalf("%d: %+v", status, o)
+		}
+		c.SetNoBot(true)
+		if o := c.Send(context.Background(), "logs", nil); o.Kind != Drop || hits.Load() != 1 {
+			t.Fatalf("%d: %+v, %d requests", status, o, hits.Load())
+		}
+	}
+}
+
+func TestUnauthorizedNamesTheRefusedKey(t *testing.T) {
+	for status, want := range map[int]string{401: apiKey, 403: "", 200: ""} {
+		s, _ := server(t, status)
+		c := NewWithClient(s.URL, s.Client(), apiKey)
+		c.DropForbidden = true
+		refused := ""
+		c.Unauthorized = func(key string) { refused = key }
+		c.Send(context.Background(), "logs", nil)
+		if refused != want {
+			t.Fatalf("%d: refused %q", status, refused)
+		}
+	}
+	s, hits := server(t, 200)
+	c := NewWithClient(s.URL, s.Client(), "")
+	c.Unauthorized = func(string) { t.Error("called with no key") }
+	if o := c.Send(context.Background(), "logs", nil); o.Kind != Pause || hits.Load() != 0 {
+		t.Fatalf("%+v", o)
 	}
 }

@@ -42,6 +42,7 @@ type instance struct {
 	ingest         *httptest.Server
 	clock          atomic.Int64
 	noBot, down    atomic.Bool
+	credsDown      atomic.Bool // only /ezgh/v1/credentials is failing
 	project        atomic.Value
 	minted         atomic.Int32
 	ingestStatus   atomic.Int32 // by default 200
@@ -74,7 +75,9 @@ func newInstance(t *testing.T) *instance {
 	}
 	old := keyPoll
 	keyPoll = 10 * time.Millisecond
-	t.Cleanup(func() { keyPoll = old })
+	oldDrain := drainWindow
+	drainWindow = 500 * time.Millisecond
+	t.Cleanup(func() { keyPoll, drainWindow = old, oldDrain })
 	return in
 }
 
@@ -91,6 +94,8 @@ func (in *instance) serveMetadata(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"id": testInstance, "project": in.project.Load().(string)})
 	case r.URL.Path == "/ezgh/v1/token":
 		io.WriteString(w, "tok")
+	case r.URL.Path == "/ezgh/v1/credentials" && in.credsDown.Load():
+		w.WriteHeader(http.StatusServiceUnavailable)
 	case r.URL.Path == "/ezgh/v1/credentials" && in.noBot.Load():
 		w.WriteHeader(http.StatusNotFound)
 		io.WriteString(w, `{"error":{"code":"no_bot"}}`)
@@ -367,6 +372,137 @@ func TestRestartWhileDetachedDropsPendingBatches(t *testing.T) {
 	eventually(t, "the drop", func() bool { return in.status().Counters["logs_rejected"] == 1 })
 	if in.requests() != 0 {
 		t.Fatal("sent with no Bot")
+	}
+}
+
+// A restart during a credentials outage is not a detach: sources run, batches spool, and they go
+// out with the next key.
+func TestRestartDuringCredentialsOutageSpools(t *testing.T) {
+	in := newInstance(t)
+	in.logLine("before the restart")
+	stop := in.run()
+	eventually(t, "the first delivery", func() bool { return in.requests() == 1 })
+	stop()
+
+	in.credsDown.Store(true)
+	in.logLine("during the outage")
+	in.run()
+	eventually(t, "the batch in the spool", func() bool { return in.status().Gauges["logs_queue_batches"] == 1 })
+	if s := in.status(); s.States["credential"] != "waiting:metadata" || s.States["logs"] != "paused:credential" || s.Counters["logs_rejected"] != 0 || in.requests() != 1 {
+		t.Fatalf("%+v, %d requests", s, in.requests())
+	}
+
+	in.credsDown.Store(false)
+	in.advance(time.Minute)
+	eventually(t, "the backlog", func() bool { return in.requests() == 2 })
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if !strings.Contains(string(in.bodies[1]), "during the outage") {
+		t.Fatal("the spooled line wasn't sent")
+	}
+}
+
+// A first boot with credentials failing still waits: nothing has been sent, so nothing is written.
+func TestFirstBootDuringCredentialsOutageStaysIdle(t *testing.T) {
+	in := newInstance(t)
+	in.credsDown.Store(true)
+	in.run()
+	eventually(t, "the waiting state", func() bool { return in.status().States["credential"] == "waiting:metadata" })
+	if got := in.stateFiles(); !slices.Equal(got, []string{"agent.lock", "status.sock"}) {
+		t.Fatalf("state %v", got)
+	}
+}
+
+func TestEndpointRefusalRecovers(t *testing.T) {
+	in := newInstance(t)
+	in.ingestStatus.Store(404)
+	in.logLine("kept")
+	in.run()
+	eventually(t, "the refusal", func() bool { return in.requests() > 0 })
+	in.ingestStatus.Store(200)
+	eventually(t, "the delivery", func() bool { return in.status().Counters["logs_exported"] == 1 })
+}
+
+func TestEndpointRefusalThenDetachDrops(t *testing.T) {
+	in := newInstance(t)
+	in.ingestStatus.Store(404)
+	in.logLine("refused")
+	in.run()
+	eventually(t, "the refusal", func() bool { return in.requests() > 0 })
+	in.noBot.Store(true)
+	in.advance(6 * time.Minute)
+	eventually(t, "the drop", func() bool { return in.status().Counters["logs_rejected"] == 1 })
+	if s := in.status(); s.States["logs"] != "rejected:no_bot" {
+		t.Fatalf("%+v", s)
+	}
+}
+
+// A revoked key doesn't wait for its rotation: the 401 fetches another now.
+func Test401RefetchesAtOnce(t *testing.T) {
+	in := newInstance(t)
+	keyPoll = time.Hour
+	in.ingestStatus.Store(401)
+	in.logLine("kept")
+	in.run()
+	eventually(t, "the refusal", func() bool { return in.requests() > 0 })
+	in.ingestStatus.Store(200)
+	eventually(t, "the second key", func() bool { return in.minted.Load() == 2 })
+	eventually(t, "the delivery with it", func() bool { return in.status().Counters["logs_exported"] == 1 })
+}
+
+// Ingest refusing every key must not turn into minting keys in a tight loop.
+func TestEveryKeyRefusedDoesNotLoop(t *testing.T) {
+	in := newInstance(t)
+	keyPoll = time.Hour
+	in.ingestStatus.Store(401)
+	in.logLine("kept")
+	in.run()
+	eventually(t, "the second key's refusal", func() bool { return in.requests() >= 2 })
+	time.Sleep(100 * time.Millisecond)
+	if s, n := in.status(), in.minted.Load(); n != 2 || s.Gauges["logs_queue_batches"] > 1 || s.Counters["logs_rejected"] != 0 {
+		t.Fatalf("%d keys minted, %+v", n, s)
+	}
+}
+
+// What a clone inherited can never be sent, so it goes as soon as the ID is known, even idle.
+func TestStaleInstanceStateRemoved(t *testing.T) {
+	in := newInstance(t)
+	state := in.config.StateDir
+	for _, p := range []string{"ins_000000000000", testInstance, "ins_short", "backup"} {
+		if err := os.MkdirAll(filepath.Join(state, p), 0700); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(state, p, "keep"), nil, 0600)
+	}
+	os.WriteFile(filepath.Join(state, "ins_111111111111"), []byte("a file"), 0600)
+	target := filepath.Join(in.dir, "elsewhere")
+	os.MkdirAll(target, 0700)
+	os.WriteFile(filepath.Join(target, "keep"), nil, 0600)
+	os.Symlink(target, filepath.Join(state, "ins_222222222222"))
+	// A v0.1 agent's queues, which aren't an instance's to clean up.
+	os.WriteFile(filepath.Join(state, "logs.db"), []byte("x"), 0600)
+	os.WriteFile(filepath.Join(state, "metrics.db"), []byte("x"), 0600)
+
+	in.down.Store(true)
+	in.run()
+	eventually(t, "the waiting state", func() bool { return in.status().States["credential"] == "waiting:metadata" })
+	if _, err := os.Stat(filepath.Join(state, "ins_000000000000")); err != nil {
+		t.Fatal("removed before the ID was known")
+	}
+	// Answering only the ID: this instance's own directory must survive with no key yet.
+	in.down.Store(false)
+	in.noBot.Store(true)
+	eventually(t, "the removal", func() bool {
+		_, err := os.Stat(filepath.Join(state, "ins_000000000000"))
+		return os.IsNotExist(err)
+	})
+	for _, p := range []string{filepath.Join(testInstance, "keep"), filepath.Join("ins_short", "keep"), filepath.Join("backup", "keep"), "ins_111111111111", "ins_222222222222", "logs.db", "metrics.db"} {
+		if _, err := os.Lstat(filepath.Join(state, p)); err != nil {
+			t.Errorf("%s: %v", p, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(target, "keep")); err != nil {
+		t.Fatal("followed a symlink")
 	}
 }
 

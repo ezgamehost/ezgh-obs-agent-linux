@@ -38,12 +38,16 @@ type Outcome struct {
 type Client struct {
 	endpoint string
 	http     *http.Client
-	// DropForbidden makes a 403 final for its batch instead of a pause: nobody is there to fix a
-	// Bot's file, and a refused signal must not fill the disk. Set before the first Send.
+	// DropForbidden is metadata mode: nobody is there to fix a file or an endpoint, so a 403 is
+	// final for its batch (a refused signal must not fill the disk) and a 404 or redirect retries
+	// rather than pausing for good, where a later detach could never reach it. Set before the
+	// first Send.
 	DropForbidden bool
-	mu            sync.RWMutex
-	key, project  string
-	noBot         bool
+	// Unauthorized, when set, hears which key a 401 refused. Set before the first Send.
+	Unauthorized func(key string)
+	mu           sync.RWMutex
+	key, project string
+	noBot        bool
 }
 
 func New(endpoint, caFile, key string) (*Client, error) {
@@ -113,7 +117,12 @@ func (c *Client) Send(ctx context.Context, signal string, payload []byte) Outcom
 	case code == 403 && c.DropForbidden:
 		return Outcome{Kind: Drop, Reason: "permission"}
 	case code == 401 || code == 403:
+		if code == 401 && c.Unauthorized != nil {
+			c.Unauthorized(key)
+		}
 		return Outcome{Kind: Pause, Reason: "credential"}
+	case (code == 404 || code >= 300 && code < 400) && c.DropForbidden:
+		return Outcome{Kind: Retry, Reason: "endpoint"}
 	case code == 404 || code >= 300 && code < 400:
 		return Outcome{Kind: Pause, Reason: "endpoint"}
 	case code == 413:

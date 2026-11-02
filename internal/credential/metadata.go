@@ -35,6 +35,9 @@ const NoBotRetry = 3 * time.Minute
 // instanceRE keeps the ID safe to use as a directory name.
 var instanceRE = regexp.MustCompile(`^ins_[a-z0-9]{12}$`)
 
+// IsInstance reports whether v is an instance's prefixed ID.
+func IsInstance(v string) bool { return instanceRE.MatchString(v) }
+
 // ErrNoBot means the instance has no Bot attached.
 var ErrNoBot = errors.New("this instance has no Bot attached")
 
@@ -139,6 +142,15 @@ func (p *Metadata) Instance(ctx context.Context) (id, project string, err error)
 	}
 	p.id, p.project = doc.ID, doc.Project
 	return p.id, p.project, nil
+}
+
+// Invalidate drops the cached key if it is the one an API refused, so the next Key refetches.
+func (p *Metadata) Invalidate(refused string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.key == refused {
+		p.key, p.expiresAt, p.nextTry = "", time.Time{}, time.Time{}
+	}
 }
 
 func (p *Metadata) fetch(ctx context.Context) error {

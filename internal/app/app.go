@@ -25,6 +25,9 @@ import (
 // keyPoll is how often the agent asks for its key. Metadata decides when that reaches the service.
 var keyPoll = 30 * time.Second
 
+// drainWindow bounds delivery of committed batches at shutdown.
+var drainWindow = 20 * time.Second
+
 func privateDir(dir string) error {
 	if e := os.MkdirAll(dir, 0700); e != nil {
 		return e
@@ -67,28 +70,48 @@ func credentialState(e error) string {
 	return "waiting:metadata"
 }
 
-// awaitKey holds a metadata-mode agent idle, writing nothing, until the instance has a key. It
+// removeStale deletes what other instances left under stateDir: a clone of this disk inherits
+// their queues, which this identity must never send. Only real directories named exactly like an
+// instance ID go. A failure only leaves disk in use, so it's reported and the agent carries on.
+func removeStale(stateDir, id string, state *diagnostics.State) {
+	entries, e := os.ReadDir(stateDir)
+	if e != nil {
+		state.Set("stale_state", "unreadable")
+		return
+	}
+	for _, d := range entries {
+		if d.IsDir() && d.Name() != id && credential.IsInstance(d.Name()) {
+			if e = os.RemoveAll(filepath.Join(stateDir, d.Name())); e != nil {
+				state.Set("stale_state", "remove_failed")
+			}
+		}
+	}
+}
+
+// awaitKey holds a metadata-mode agent idle, writing no data, until the instance has a key. It
 // never gives up on the metadata service: a boot can beat it, and a Bot can be attached at any
-// time. The exception is an instance that has already sent, whose state directory exists: told
-// there's no Bot, it carries on with no key, so sources keep moving their checkpoints and dropping
-// as they do on a live detach. Waiting there would send the whole gap once a Bot came back.
-func awaitKey(ctx context.Context, m *credential.Metadata, stateDir string, state *diagnostics.State) (id, project, key string, e error) {
+// time. The exception is an instance that has already sent, whose state directory exists: it
+// carries on with no key, so sources keep running. Told there's no Bot (noBot), they drop as on a
+// live detach, because waiting would send the whole gap once a Bot came back. Otherwise it's an
+// outage, and they spool for the next key.
+func awaitKey(ctx context.Context, m *credential.Metadata, stateDir string, state *diagnostics.State) (id, project, key string, noBot bool, e error) {
 	for {
 		if id, project, e = m.Instance(ctx); e == nil {
 			state.Set("instance", id)
 			state.Set("project", project)
+			removeStale(stateDir, id, state)
 			if key, e = m.Key(ctx); e == nil {
 				state.Set("credential", credentialState(nil))
-				return id, project, key, nil
+				return id, project, key, false, nil
 			}
-			if _, err := os.Stat(filepath.Join(stateDir, id)); err == nil && errors.Is(e, credential.ErrNoBot) {
+			if _, err := os.Stat(filepath.Join(stateDir, id)); err == nil {
 				state.Set("credential", credentialState(e))
-				return id, project, "", nil
+				return id, project, "", errors.Is(e, credential.ErrNoBot), nil
 			}
 		}
 		state.Set("credential", credentialState(e))
 		if !sleep(ctx, keyPoll) {
-			return "", "", "", ctx.Err()
+			return "", "", "", false, ctx.Err()
 		}
 	}
 }
@@ -112,9 +135,10 @@ func run(ctx context.Context, c config.Config, reload <-chan os.Signal, m *crede
 	}
 	defer closeStatus()
 	var id, project, key string
+	var noBot bool
 	dir := c.StateDir
 	if metadata {
-		if id, project, key, e = awaitKey(ctx, m, c.StateDir, state); e != nil {
+		if id, project, key, noBot, e = awaitKey(ctx, m, c.StateDir, state); e != nil {
 			return nil // stopped while idle
 		}
 		// A clone of this disk has a new ID, so it starts clean rather than sending this state.
@@ -141,7 +165,17 @@ func run(ctx context.Context, c config.Config, reload <-chan os.Signal, m *crede
 	}
 	client.SetProject(project)
 	client.DropForbidden = metadata
-	client.SetNoBot(metadata && key == "")
+	client.SetNoBot(noBot)
+	wake := make(chan struct{}, 1)
+	if metadata {
+		client.Unauthorized = func(refused string) {
+			m.Invalidate(refused)
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		}
+	}
 	binding := c.Target + "|" + c.Endpoint + "|" + c.Environment + "|" + id
 	if project != "" {
 		// Only then: a changed binding refuses to start, and ingest-key queues predate this.
@@ -237,22 +271,35 @@ func run(ctx context.Context, c config.Config, reload <-chan os.Signal, m *crede
 	if metadata {
 		reload = nil // no credential file to read again
 		start(&sources, func() error {
-			current, noBot := key, key == ""
-			for sleep(sourceCtx, keyPoll) {
+			current, detached := key, noBot
+			t := time.NewTicker(keyPoll)
+			defer t.Stop()
+			var woken time.Time
+			for {
+				select {
+				case <-sourceCtx.Done():
+					return nil
+				case <-t.C:
+				case <-wake:
+					// Once per poll: ingest refusing every key must not mint keys in a loop.
+					if time.Since(woken) < keyPoll {
+						continue
+					}
+					woken = time.Now()
+				}
 				k, e := m.Key(sourceCtx)
 				if sourceCtx.Err() != nil {
-					break // says nothing about the key, and the drain below still needs it
+					return nil // says nothing about the key, and the drain below still needs it
 				}
 				bot := errors.Is(e, credential.ErrNoBot)
-				if k != current || bot != noBot {
+				if k != current || bot != detached {
 					client.SetNoBot(bot)
 					client.SetCredential(k)
 					generation.Add(1)
-					current, noBot = k, bot
+					current, detached = k, bot
 				}
 				state.Set("credential", credentialState(e))
 			}
-			return nil
 		})
 	}
 	start(&sources, func() error {
@@ -296,7 +343,7 @@ func run(ctx context.Context, c config.Config, reload <-chan os.Signal, m *crede
 	stopSources()
 	sources.Wait()
 	// Readers stop first. Committed work gets a bounded drain window; uncommitted reads replay.
-	deadline := time.NewTimer(20 * time.Second)
+	deadline := time.NewTimer(drainWindow)
 	defer deadline.Stop()
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()

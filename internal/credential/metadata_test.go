@@ -75,10 +75,23 @@ func TestMetadataCredentials(t *testing.T) {
 		t.Fatalf("not refreshed before expiry: %q", k)
 	}
 
+	// An API refused the key: the next Key refetches. A key already replaced changes nothing.
+	key.Store("ezgh_three")
+	m.Invalidate("ezgh_two")
+	if k, _ := m.Key(ctx); k != "ezgh_three" {
+		t.Fatalf("not refetched after a 401: %q", k)
+	}
+	m.Invalidate("ezgh_two")
+	n := fetches.Load()
+	if k, _ := m.Key(ctx); k != "ezgh_three" || fetches.Load() != n {
+		t.Fatalf("a stale refusal dropped the current key: %q", k)
+	}
+	key.Store("ezgh_two")
+
 	// A failed fetch keeps the old key until it expires, then reports the outage: not ErrNoBot.
 	outage.Store(true)
 	now.t = now.t.Add(6 * time.Minute)
-	if k, err := m.Key(ctx); err != nil || k != "ezgh_two" {
+	if k, err := m.Key(ctx); err != nil || k != "ezgh_three" {
 		t.Fatalf("old key not kept through an outage: %q, %v", k, err)
 	}
 	now.t = now.t.Add(5 * time.Minute)
@@ -102,7 +115,7 @@ func TestMetadataCredentials(t *testing.T) {
 	if k, err := m.Key(ctx); !errors.Is(err, ErrNoBot) || k != "" {
 		t.Fatalf("%q, %v, want ErrNoBot", k, err)
 	}
-	n := fetches.Load()
+	n = fetches.Load()
 	now.t = now.t.Add(2 * time.Minute)
 	if _, err := m.Key(ctx); !errors.Is(err, ErrNoBot) || fetches.Load() != n {
 		t.Fatalf("asked again too soon: %v, %d fetches", err, fetches.Load()-n)
@@ -164,6 +177,14 @@ func TestAvailable(t *testing.T) {
 		}
 		if got := (&Metadata{ProductNamePath: p}).Available(); got != want {
 			t.Fatalf("%q: %v", strings.TrimSpace(name), got)
+		}
+	}
+}
+
+func TestIsInstance(t *testing.T) {
+	for v, want := range map[string]bool{"ins_a1b2c3d4e5f6": true, "ins_a1b2c3d4e5f": false, "ins_a1b2c3d4e5f67": false, "ins_A1B2C3D4E5F6": false, "prj_a1b2c3d4e5f6": false, "ins_a1b2c3d4e5f6.old": false} {
+		if IsInstance(v) != want {
+			t.Errorf("%q", v)
 		}
 	}
 }
