@@ -25,9 +25,10 @@ func collectMetrics(ctx context.Context, c config.Config, id, host string, q *sp
 		return e
 	}
 	type result struct {
-		f  []*dto.MetricFamily
-		e  error
-		at time.Time
+		f       []*dto.MetricFamily
+		e       error
+		at      time.Time
+		scraped []scraped
 	}
 	done := make(chan result, 1)
 	t := time.NewTimer(time.Duration(rand.Int64N(int64(c.Metrics.Interval.Duration))))
@@ -48,7 +49,10 @@ func collectMetrics(ctx context.Context, c config.Config, id, host string, q *sp
 				continue
 			}
 			started = time.Now()
-			go func(at time.Time) { f, e := collector.Gather(); done <- result{f, e, at} }(started)
+			go func(at time.Time) {
+				f, e := collector.Gather()
+				done <- result{f, e, at, scrapeAll(ctx, c)}
+			}(started)
 		case r := <-done:
 			started = time.Time{}
 			s.Gauge("metrics_collection_age_seconds", 0)
@@ -74,6 +78,20 @@ func collectMetrics(ctx context.Context, c config.Config, id, host string, q *sp
 					s.Add("metrics_collected", uint64(telemetry.Count("metrics", p)))
 				}
 				s.Set("metrics_collection", "ready")
+			}
+			for _, sc := range r.scraped {
+				if sc.err != nil {
+					s.Add("metrics_scrape_errors", 1)
+					continue
+				}
+				payloads, e := telemetry.EncodeMetrics(sc.families, telemetry.Resource(id, host, c.Environment, sc.service), r.at, c.Metrics.MaxPoints, c.Metrics.MaxBytes)
+				if e != nil {
+					s.Add("metrics_rejected_scrapes", 1)
+					continue
+				}
+				if e = q.Enqueue(payloads, nil); e != nil && !errors.Is(e, spool.ErrFull) {
+					return e
+				}
 			}
 		case <-health.C:
 			if !started.IsZero() {

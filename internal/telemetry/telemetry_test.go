@@ -6,6 +6,8 @@ import (
 	metrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	"google.golang.org/protobuf/proto"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -101,5 +103,46 @@ func TestUpstreamUntypedPreservesNameAndValue(t *testing.T) {
 	m := r.ResourceMetrics[0].ScopeMetrics[0].Metrics[0]
 	if m.Name != "node_vmstat_pgpgin" || m.GetGauge().DataPoints[0].GetAsDouble() != 123 {
 		t.Fatal(m)
+	}
+}
+
+func TestResourceCarriesTheAttributesFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "attributes.json")
+	if e := os.WriteFile(path, []byte(`{"lbr":"lbr_a","role":"active","host.id":"forged"}`), 0o644); e != nil {
+		t.Fatal(e)
+	}
+	UseAttributesFile(path)
+	defer UseAttributesFile("")
+	get := func() map[string]string {
+		m := map[string]string{}
+		for _, a := range Resource("ins_a", "host", "production", "haproxy").Attributes {
+			m[a.Key] = a.Value.GetStringValue()
+		}
+		return m
+	}
+	got := get()
+	if got["lbr"] != "lbr_a" || got["role"] != "active" {
+		t.Errorf("%v", got)
+	}
+	if got["host.id"] != "ins_a" {
+		t.Errorf("a file changed host.id: %v", got)
+	}
+	if e := os.WriteFile(path, []byte(`not json`), 0o644); e != nil {
+		t.Fatal(e)
+	}
+	extra.Lock()
+	extra.next = time.Time{}
+	extra.Unlock()
+	if got := get(); got["role"] != "active" {
+		t.Errorf("a bad rewrite lost what it had: %v", got)
+	}
+	if e := os.WriteFile(path, []byte(`{"role":"passive"}`), 0o644); e != nil {
+		t.Fatal(e)
+	}
+	extra.Lock()
+	extra.next = time.Time{}
+	extra.Unlock()
+	if got := get(); got["role"] != "passive" {
+		t.Errorf("a rewrite didn't land: %v", got)
 	}
 }

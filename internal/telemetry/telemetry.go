@@ -2,6 +2,7 @@
 package telemetry
 
 import (
+	"encoding/json"
 	"errors"
 	dto "github.com/prometheus/client_model/go"
 	logservice "go.opentelemetry.io/proto/otlp/collector/logs/v1"
@@ -11,8 +12,10 @@ import (
 	metrics "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resource "go.opentelemetry.io/proto/otlp/resource/v1"
 	"google.golang.org/protobuf/proto"
+	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -22,11 +25,60 @@ const MaxBatch = 1 << 20
 func Attribute(k, v string) *common.KeyValue {
 	return &common.KeyValue{Key: k, Value: &common.AnyValue{Value: &common.AnyValue_StringValue{StringValue: v}}}
 }
+
+// extra is the resource attributes file. It's read at most once a second, because Resource runs
+// per log line, and a file that's gone or doesn't parse keeps what was last read.
+var extra struct {
+	sync.Mutex
+	path string
+	next time.Time
+	kv   []*common.KeyValue
+}
+
+// UseAttributesFile adds a JSON object of string attributes to every Resource from now on.
+func UseAttributesFile(path string) {
+	extra.Lock()
+	defer extra.Unlock()
+	extra.path, extra.next, extra.kv = path, time.Time{}, nil
+}
+
+// reserved are the attributes that say what the data is. A file doesn't get to change those.
+var reserved = map[string]bool{"host.id": true, "host.name": true, "os.type": true, "service.name": true, "service.instance.id": true, "ezgh.metadata.application": true, "ezgh.metadata.environment": true}
+
+func extraAttributes() []*common.KeyValue {
+	extra.Lock()
+	defer extra.Unlock()
+	if extra.path == "" {
+		return nil
+	}
+	if now := time.Now(); now.After(extra.next) {
+		extra.next = now.Add(time.Second)
+		if b, e := os.ReadFile(extra.path); e == nil && len(b) <= 1<<16 {
+			var m map[string]string
+			if json.Unmarshal(b, &m) == nil {
+				keys := make([]string, 0, len(m))
+				for k := range m {
+					if !reserved[k] {
+						keys = append(keys, k)
+					}
+				}
+				sort.Strings(keys)
+				kv := make([]*common.KeyValue, 0, len(keys))
+				for _, k := range keys {
+					kv = append(kv, Attribute(k, m[k]))
+				}
+				extra.kv = kv
+			}
+		}
+	}
+	return extra.kv
+}
+
 func Resource(id, hostname, environment, service string) *resource.Resource {
 	id, _ = Bounded(id, 4096)
 	hostname, _ = Bounded(hostname, 4096)
 	service, _ = Bounded(service, 4096)
-	return &resource.Resource{Attributes: []*common.KeyValue{Attribute("host.id", id), Attribute("host.name", hostname), Attribute("os.type", "linux"), Attribute("service.name", service), Attribute("service.instance.id", id), Attribute("ezgh.metadata.application", "linux"), Attribute("ezgh.metadata.environment", environment)}}
+	return &resource.Resource{Attributes: append([]*common.KeyValue{Attribute("host.id", id), Attribute("host.name", hostname), Attribute("os.type", "linux"), Attribute("service.name", service), Attribute("service.instance.id", id), Attribute("ezgh.metadata.application", "linux"), Attribute("ezgh.metadata.environment", environment)}, extraAttributes()...)}
 }
 func Bounded(s string, n int) (string, bool) {
 	v := strings.ToValidUTF8(s, "�")

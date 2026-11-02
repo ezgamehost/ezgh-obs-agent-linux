@@ -107,3 +107,21 @@ func TestKeyMustMatchProject(t *testing.T) {
 		}
 	}
 }
+
+func TestScrapeAndAttributes(t *testing.T) {
+	base := "version: 1\ntarget: t\nenvironment: e\ncredential: metadata\n"
+	good := base + "resource_attributes_file: /run/a.json\nmetrics:\n  scrape:\n    - url: http://127.0.0.1:8405/metrics\n      service: haproxy\n"
+	if c, e := Parse(strings.NewReader(good)); e != nil || len(c.Metrics.Scrape) != 1 || c.ResourceAttributesFile != "/run/a.json" {
+		t.Fatalf("%+v %v", c, e)
+	}
+	for name, cfg := range map[string]string{
+		"remote":   "metrics:\n  scrape:\n    - url: http://example.com/metrics\n      service: x\n",
+		"https":    "metrics:\n  scrape:\n    - url: https://127.0.0.1/metrics\n      service: x\n",
+		"no name":  "metrics:\n  scrape:\n    - url: http://127.0.0.1/metrics\n",
+		"relative": "resource_attributes_file: a.json\n",
+	} {
+		if _, e := Parse(strings.NewReader(base + cfg)); e == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

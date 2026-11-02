@@ -15,13 +15,13 @@ the Kubernetes `ezgh-obs-agent` chart. There is no remote control or self-update
 ## Install
 
 Download the package matching your architecture from the
-[v0.2.1 preview release](https://github.com/ezgamehost/ezgh-obs-agent-linux/releases/tag/v0.2.1).
+[v0.3.0 preview release](https://github.com/ezgamehost/ezgh-obs-agent-linux/releases/tag/v0.3.0).
 Verify its SHA-256 against the accompanying `SHA256SUMS` before installing:
 
 ```sh
-sudo dpkg -i ezgh-obs-agent-linux_0.2.1_amd64.deb
+sudo dpkg -i ezgh-obs-agent-linux_0.3.0_amd64.deb
 # Or, on an RPM system:
-sudo rpm -Uvh ezgh-obs-agent-linux-0.2.1-1.x86_64.rpm
+sudo rpm -Uvh ezgh-obs-agent-linux-0.3.0-1.x86_64.rpm
 ```
 
 The service runs as `ezgh-obs-agent`. Packages grant membership in `systemd-journal`
@@ -111,6 +111,24 @@ Switching an installation from `credential_file` to `credential: metadata` start
 queues under `<state_dir>/<ins_id>/`. The agent doesn't read or remove the old `logs.db`
 and `metrics.db` at the top of `state_dir`, so drain them first; once unneeded, delete them
 by hand.
+
+## Extra attributes and local metrics
+
+`resource_attributes_file` names a JSON object of string attributes, such as
+`{"role":"active"}`, added to every log line and metric. Another process may rewrite it at any
+time, and a file that doesn't parse keeps the last good set. It can't change the agent's own
+attributes (`host.id`, `service.name` and the rest).
+
+`metrics.scrape` lists Prometheus endpoints on the loopback address, read with every collection
+and sent under their `service`:
+
+```yaml
+resource_attributes_file: /run/myapp/attributes.json
+metrics:
+  scrape:
+    - url: http://127.0.0.1:9100/metrics
+      service: myapp
+```
 
 ## Collection and identity
 
@@ -217,7 +235,7 @@ pkg-config and CA certificates. On Debian/Ubuntu:
 sudo apt-get install build-essential libsystemd-dev pkg-config
 scripts/test.sh
 # Also requires python3, rpm and dpkg-deb:
-scripts/build.sh 0.2.1
+scripts/build.sh 0.3.0
 ```
 
 `dist/` receives tar/deb/rpm artifacts, CycloneDX module inventories and checksums.

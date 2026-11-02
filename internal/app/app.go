@@ -119,6 +119,7 @@ func Run(ctx context.Context, c config.Config, reload <-chan os.Signal) error {
 	return run(ctx, c, reload, &credential.Metadata{})
 }
 func run(ctx context.Context, c config.Config, reload <-chan os.Signal, m *credential.Metadata) error {
+	telemetry.UseAttributesFile(c.ResourceAttributesFile)
 	metadata := c.Credential == config.CredentialMetadata
 	if metadata && !m.Available() {
 		return errors.New("credential: metadata works only on an EZGH Compute instance")

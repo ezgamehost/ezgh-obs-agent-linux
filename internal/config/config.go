@@ -28,6 +28,13 @@ type File struct {
 	Service string   `yaml:"service"`
 	StartAt string   `yaml:"start_at"`
 }
+
+// Scrape is one local Prometheus endpoint, sent as Service.
+type Scrape struct {
+	URL     string `yaml:"url"`
+	Service string `yaml:"service"`
+}
+
 type Config struct {
 	Version        int    `yaml:"version"`
 	Target         string `yaml:"target"`
@@ -39,12 +46,17 @@ type Config struct {
 	StateDir       string `yaml:"state_dir"`
 	CAFile         string `yaml:"ca_file"`
 	HostID         string `yaml:"host_id"`
-	Metrics        struct {
+	// ResourceAttributesFile is a JSON object of string attributes for every log line and metric,
+	// which another process on the host may rewrite at any time.
+	ResourceAttributesFile string `yaml:"resource_attributes_file"`
+	Metrics                struct {
 		Enabled    bool     `yaml:"enabled"`
 		Interval   Duration `yaml:"interval"`
 		Collectors []string `yaml:"collectors"`
 		MaxPoints  int      `yaml:"max_points"`
 		MaxBytes   int      `yaml:"max_bytes"`
+		// Scrape is Prometheus endpoints on this host, read with every collection.
+		Scrape []Scrape `yaml:"scrape"`
 	} `yaml:"metrics"`
 	Logs struct {
 		Journal struct {
@@ -135,6 +147,19 @@ func Parse(r io.Reader) (Config, error) {
 	}
 	if c.Metrics.MaxPoints < 1 || c.Metrics.MaxPoints > 1000000 || c.Metrics.MaxBytes < 1<<20 || c.Metrics.MaxBytes > 64<<20 {
 		return c, errors.New("metric limits out of range")
+	}
+	if c.ResourceAttributesFile != "" && !filepath.IsAbs(c.ResourceAttributesFile) {
+		return c, errors.New("resource_attributes_file must be an absolute path")
+	}
+	for _, s := range c.Metrics.Scrape {
+		u, e := url.Parse(s.URL)
+		// Local only: this agent carries a key, and has no business fetching from anywhere else.
+		if e != nil || u.Scheme != "http" || (u.Hostname() != "127.0.0.1" && u.Hostname() != "::1") || u.User != nil {
+			return c, errors.New("a scrape url must be http on the loopback address")
+		}
+		if s.Service == "" || len(s.Service) > 128 {
+			return c, errors.New("a scrape needs a service")
+		}
 	}
 	allowed := map[string]bool{}
 	for _, v := range DefaultCollectors {
