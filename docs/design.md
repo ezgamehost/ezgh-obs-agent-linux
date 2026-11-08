@@ -214,7 +214,7 @@ allows 5 MiB wire / 64 MiB decoded requests and 64 KiB log bodies.
 | HTTP 403 | With `credential_file`, as 401. In metadata mode, drop the batch, count it as rejected, name the missing action in the signal's state, and drop that signal's batches unsent for 10 seconds |
 | No Bot (metadata service's `no_bot`) | Drop every batch without touching the network; checkpoints keep advancing |
 | No key (none yet, or expired during a metadata outage) | Retain queue, pause exports until a key arrives |
-| HTTP 404 or unsupported protocol | Retain queue, pause exports until configuration correction. In metadata mode nobody can correct it, so retry with backoff, which also lets a detach reach the batch |
+| HTTP 404 or unsupported protocol | Retain queue, pause exports until SIGHUP reloads the configuration, which re-reads the credential file and resumes the export. In metadata mode nobody can correct it, so retry with backoff, which also lets a detach reach the batch |
 | HTTP 413 | Split batch durably; reject and count an indivisible record if still refused |
 | Other permanent protocol rejection | Count dropped items and acknowledge offending batch; never log body or credentials |
 
@@ -309,7 +309,7 @@ listener is enabled in v1.
 
 The credential is `credential_file` (a project ingest key, or an `ezgh_` API key with
 `project: prj_…`) or `credential: metadata`. SIGHUP reloads only the credential file and
-resumes a paused authentication export;
+resumes any paused export (authentication or endpoint);
 other configuration changes require restart. SIGTERM stops readers, commits their
 pending accepted work, permits up to 20 seconds for delivery, closes storage and
 exits; any undelivered committed batches survive. Systemd StopTimeout is 30 seconds.

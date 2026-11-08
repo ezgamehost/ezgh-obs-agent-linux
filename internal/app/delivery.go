@@ -89,7 +89,7 @@ func deliver(ctx context.Context, signal string, q *spool.Queue, client *exporte
 			}
 		case exporter.Pause:
 			state.Set(signal, "paused:"+o.Reason)
-			for ctx.Err() == nil && (o.Reason != "credential" || generation.Load() == gen) {
+			for ctx.Err() == nil && generation.Load() == gen {
 				if !sleep(ctx, time.Second) {
 					break
 				}

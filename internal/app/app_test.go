@@ -5,12 +5,15 @@ import (
 	"encoding/pem"
 	"github.com/ezgamehost/ezgh-obs-agent-linux/internal/config"
 	"github.com/ezgamehost/ezgh-obs-agent-linux/internal/diagnostics"
+	exporter "github.com/ezgamehost/ezgh-obs-agent-linux/internal/export"
 	"github.com/ezgamehost/ezgh-obs-agent-linux/internal/spool"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -155,5 +158,34 @@ func TestFileCredentialModes(t *testing.T) {
 	seed(bound)
 	if e := Run(context.Background(), doc("\nproject: prj_aaaaaaaaaaaa"), nil); e == nil || !strings.Contains(e.Error(), "pending") {
 		t.Fatalf("moved pending data to another project: %v", e)
+	}
+}
+
+// A 404 in file mode pauses the signal; a reload ends the pause and the batch goes out again.
+func TestEndpointPauseEndsOnReload(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	q := queue(t, "logs", t.TempDir(), logBatch(t))
+	client := exporter.NewWithClient(server.URL, server.Client(), "ezgh_key")
+	state := diagnostics.New()
+	var generation atomic.Uint64
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Go(func() { deliver(ctx, "logs", q, client, state, &generation) })
+	eventually(t, "paused", func() bool { return state.Snapshot().States["logs"] == "paused:endpoint" })
+	generation.Add(1)
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	wg.Wait()
+	if calls.Load() < 2 {
+		t.Fatalf("no second send after reload, %d calls", calls.Load())
 	}
 }
