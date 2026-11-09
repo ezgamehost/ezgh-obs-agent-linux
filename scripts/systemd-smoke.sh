@@ -11,7 +11,7 @@ cleanup() {
 }
 trap cleanup EXIT
 arch=$(dpkg --print-architecture)
-dpkg -i "dist/ezgh-obs-agent-linux_0.3.3_${arch}.deb"
+dpkg -i "dist/ezgh-obs-agent-linux_0.3.4_${arch}.deb"
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$work/key.pem" -out "$work/ca.pem" -days 1 -subj /CN=localhost -addext subjectAltName=DNS:localhost >/dev/null 2>&1
 install -m 644 "$work/ca.pem" /etc/ezgh-obs-agent-linux/smoke-ca.pem
 python3 - "$work" <<'PY' &
@@ -62,7 +62,7 @@ before=$(cat /var/lib/ezgh-obs-agent-linux/host-id)
 systemctl reload ezgh-obs-agent-linux.service
 systemctl restart ezgh-obs-agent-linux.service
 [ "$(cat /var/lib/ezgh-obs-agent-linux/host-id)" = "$before" ]
-dpkg -i "dist/ezgh-obs-agent-linux_0.3.3_${arch}.deb"
+dpkg -i "dist/ezgh-obs-agent-linux_0.3.4_${arch}.deb"
 systemctl is-active --quiet ezgh-obs-agent-linux.service
 dpkg -r ezgh-obs-agent-linux
 [ "$(cat /var/lib/ezgh-obs-agent-linux/host-id)" = "$before" ]

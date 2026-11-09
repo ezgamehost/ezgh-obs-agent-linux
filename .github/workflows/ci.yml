@@ -32,7 +32,7 @@ jobs:
           go-version-file: go.mod
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: scripts/test.sh
-      - run: scripts/build.sh 0.3.3
+      - run: scripts/build.sh 0.3.4
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.arch }}
